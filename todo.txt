@@ -1,0 +1,7 @@
+Audio Processing Library (Python - Librosa, Python - PyDub)
+    - audio loading
+    - playback
+    - manipulation
+    - feature
+    - extraction
+    - signal processing
