@@ -1,2 +1,2 @@
 # peony
-Rust library for audio signals processing
+Rust Audio Processing Library
