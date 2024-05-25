@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 cpal = "0.15.3"
-hound = "3.5.1"
 rodio = "0.18.0"
+symphonia = { version = "0.5.4", features = ["all"] }
 

@@ -1,39 +1,30 @@
-use cpal::Sample as CpalSample;
+use std::time::Duration;
+use std::error::Error;
+
+use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
+
 use rodio::{Sample as RodioSample, Source};
-use std::{fs::File, io::BufReader, time::Duration};
 
-mod loader;
-mod sample;
+mod load;
 
-use loader::Loader;
-use sample::CpalSampleTraits;
+use load::SignalLoader;
 
-////////////////////////////////////////////  Signal  ////////////////////////////////////////////
+//////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////
 
 pub struct Signal<S>
 where
-    S: CpalSample,
+    S: SymphoniaSample,
 {
-    samples: Vec<S>,
-    channels: u16,
-    sample_rate: u32,
+    pub samples: Vec<S>,
+    pub channels: u16,
+    pub sample_rate: u32,
 }
 
 impl<S> Signal<S>
 where
-    S: CpalSample,
+    S: SymphoniaSample,
 {
-    pub fn load(path: &str) -> SignalBuilder<S> {
-        SignalBuilder {
-            path: path.to_string(),
-            offset: Duration::from_secs(0),
-            duration: None,
-            mono: false,
-            sample_rate: None,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
+    //  Utility functions
     pub fn len(&self) -> usize {
         self.samples.len()
     }
@@ -52,119 +43,117 @@ where
         std::any::type_name::<S>()
     }
 
-    //  Iterator
-    pub fn into_iter(self) -> SignalIter<std::vec::IntoIter<S>> {
-        SignalIter {
-            samples: self.samples.into_iter(),
-            channels: self.channels,
-            sample_rate: self.sample_rate,
+    pub fn rodio_source<R>(self) -> SignalRodioSource<S, R>
+    where
+        R: RodioSample + FromSample<S>,
+    {
+        SignalRodioSource {
+            signal: self,
+            index: 0,
+            _marker: std::marker::PhantomData,
         }
     }
-}
 
-////////////////////////////////////////////  SignalBuilder  ////////////////////////////////////////////
-
-pub struct SignalBuilder<S>
-where
-    S: CpalSample,
-{
-    path: String,
-    offset: Duration,
-    duration: Option<Duration>,
-    mono: bool,
-    sample_rate: Option<u32>,
-    _marker: std::marker::PhantomData<S>,
-}
-
-impl<S> SignalBuilder<S>
-where
-    S: CpalSampleTraits,
-{
-    pub fn offset(mut self, offset: Duration) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    pub fn duration(mut self, duration: Duration) -> Self {
-        self.duration = Some(duration);
-        self
-    }
-
-    pub fn to_mono(mut self) -> Self {
-        self.mono = true;
-        self
-    }
-
-    pub fn build(self) -> Result<Signal<S>, std::io::Error> {
-        let file = match File::open(self.path) {
-            Ok(file) => BufReader::new(file),
-            Err(e) => return Err(e),
+    //  True functions
+    pub fn load(
+        path: &str,
+        offset: Duration,
+        duration: Option<Duration>,
+    ) -> Result<Signal<S>, Box<dyn Error>> {
+        let loader = SignalLoader {
+            path: path.to_string(),
+            offset,
+            duration,
+            _marker: std::marker::PhantomData,
         };
 
-        let loader = Loader::new(file);
+        loader.load()
+    }
 
-        Ok(loader.load())
+    pub fn load_default(path: &str) -> Result<Signal<S>, Box<dyn Error>> {
+        Self::load(path, Duration::ZERO, None)
+    }
+
+    pub fn to_mono(&mut self) {
+        todo!();
     }
 }
 
-////////////////////////////////////////////  SignalIter  ////////////////////////////////////////////
+//////////////////////////////////////////////////  SignalRodioSource  //////////////////////////////////////////////////
 
-pub struct SignalIter<I>
+pub struct SignalRodioSource<S, R>
 where
-    I: ExactSizeIterator,
-    I::Item: CpalSample,
+    S: SymphoniaSample,
+    R: RodioSample + FromSample<S>,
 {
-    samples: I,
-    channels: u16,
-    sample_rate: u32,
+    pub signal: Signal<S>,
+    pub index: usize,
+    pub _marker: std::marker::PhantomData<R>,
 }
 
-impl<I> Iterator for SignalIter<I>
+impl<S, R> SignalRodioSource<S, R>
 where
-    I: ExactSizeIterator,
-    I::Item: CpalSample,
+    S: SymphoniaSample,
+    R: RodioSample + FromSample<S>,
 {
-    type Item = I::Item;
+    pub fn inner(self) -> Signal<S> {
+        self.signal
+    }
+}
+
+impl<S, R> Iterator for SignalRodioSource<S, R>
+where
+    S: SymphoniaSample,
+    R: RodioSample + FromSample<S>,
+{
+    type Item = R;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.samples.next()
+        if self.index < self.signal.len() {
+            self.index += 1;
+
+            Some(<R as FromSample<S>>::from_sample(self.signal.samples[self.index - 1]))
+        }
+        else {
+            None
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.samples.size_hint()
+        (self.index - self.signal.len(), Some(self.index - self.signal.len()))
     }
 }
 
-impl<I> ExactSizeIterator for SignalIter<I>
+impl<S, R> ExactSizeIterator for SignalRodioSource<S, R>
 where
-    I: ExactSizeIterator,
-    I::Item: CpalSample,
+    S: SymphoniaSample, 
+    R: RodioSample + FromSample<S>,
 {
 }
 
-impl<I> Source for SignalIter<I>
+impl<S, R> Source for SignalRodioSource<S, R>
 where
-    I: ExactSizeIterator,
-    I::Item: RodioSample,
+    S: SymphoniaSample,
+    R: RodioSample + FromSample<S>,
 {
     fn current_frame_len(&self) -> Option<usize> {
-        Some(self.samples.len() / self.channels as usize)
+        Some(self.signal.samples.len() / self.signal.channels as usize)
     }
 
     fn channels(&self) -> u16 {
-        self.channels
+        self.signal.channels
     }
 
     fn sample_rate(&self) -> u32 {
-        self.sample_rate
+        self.signal.sample_rate
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs_f64(
-            self.samples.len() as f64 / (self.channels as f64 * self.sample_rate as f64),
-        ))
+        Some(self.signal.total_duration())
     }
 }
+
+//////////////////////////////////////////////////  SignalRodioSource  //////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
@@ -172,13 +161,19 @@ mod tests {
 
     #[test]
     fn tests() {
-        let signal: Signal<f32> = Signal::load("Shape of You.wav").build().unwrap();
-        println!(
-            "{}, {}, {}, {:?}",
-            signal.len(),
-            signal.channels,
-            signal.sample_rate,
-            signal.total_duration()
-        );
+        let signal: Signal<f32> = Signal::load(
+            "Shape of You.wav",
+            Duration::from_secs(10),
+            Some(Duration::from_secs(10)),
+        )
+        .unwrap();
+
+        let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
+
+        let source = signal.rodio_source::<f32>();
+
+        let _ = stream_handle.play_raw(source.convert_samples());
+
+        std::thread::sleep(std::time::Duration::from_secs(10));
     }
 }
