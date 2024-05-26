@@ -153,7 +153,7 @@ fn file_format(path: &str) -> Result<Box<dyn FormatReader>, Box<dyn Error>> {
     Ok(format)
 }
 
-pub fn get_duration(path: &str) -> Result<Duration, Box<dyn Error>> {
+pub fn get_file_duration(path: &str) -> Result<Duration, Box<dyn Error>> {
     let format = file_format(path)?;
 
     let track = format.default_track().unwrap();
@@ -162,15 +162,23 @@ pub fn get_duration(path: &str) -> Result<Duration, Box<dyn Error>> {
         Some(n_frames) => n_frames,
         None => return Err("No duration found".into()),
     };
-    let sample_rate = track.codec_params.sample_rate.ok_or("No sample rate found")?;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or("No sample rate found")?;
 
-    Ok(Duration::from_secs_f64(n_frames as f64 / sample_rate as f64))
+    Ok(Duration::from_secs_f64(
+        n_frames as f64 / sample_rate as f64,
+    ))
 }
 
-pub fn get_sample_rate(path: &str) -> Result<u32, Box<dyn Error>> {
+pub fn get_file_sample_rate(path: &str) -> Result<u32, Box<dyn Error>> {
     let format = file_format(path)?;
 
     let track = format.default_track().unwrap();
 
-    track.codec_params.sample_rate.ok_or("No sample rate found".into())
+    track
+        .codec_params
+        .sample_rate
+        .ok_or("No sample rate found".into())
 }

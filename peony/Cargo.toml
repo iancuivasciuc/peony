@@ -8,5 +8,6 @@ edition = "2021"
 [dependencies]
 cpal = "0.15.3"
 rodio = "0.18.0"
+rubato = "0.15.0"
 symphonia = { version = "0.5.4", features = ["all"] }
 
