@@ -2,19 +2,17 @@ use std::error::Error;
 use std::time::Duration;
 
 use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
-use symphonia::core::sample::{i24, u24};
 
 use rodio::{Sample as RodioSample, Source};
 
 mod load;
-mod samples;
 mod resample;
+mod samples;
 mod util;
 
 use load::SignalLoader;
-use samples::Samples;
 use resample::{ResampleType, Resampler};
-use util::Util;
+use samples::Samples;
 
 //////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////
 
@@ -87,11 +85,11 @@ where
         resample_type: ResampleType,
     ) -> Result<(), Box<dyn Error>>
     where
-        f64: symphonia::core::conv::FromSample<S>
+        f64: symphonia::core::conv::FromSample<S>,
     {
         let resampler = Resampler::new(resample_type);
 
-        resampler.resample(self, new_sample_rate);
+        resampler.resample(self, new_sample_rate)?;
 
         Ok(())
     }
@@ -192,9 +190,12 @@ mod tests {
 
         signal.to_mono();
 
-        signal.resample(22000, ResampleType::Fft).unwrap();
+        signal.resample(22050, ResampleType::SincVeryHighQuality).unwrap();
 
-        println!("{}", signal.len());
+        signal.sample_rate = 22265;
+
+        println!("Main: {} {}", signal.samples.len(), signal.samples.capacity());
+        println!("Duration: {:?}", signal.total_duration());
 
         let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
 

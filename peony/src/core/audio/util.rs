@@ -34,11 +34,16 @@ impl Util {
         Util::_interleave(samples)
     }
 
-    pub fn into_interleave<T: Copy + Default>(samples: Vec<Vec<T>>) -> Result<Vec<T>, Box<dyn Error>> {
+    pub fn into_interleave<T: Copy + Default>(
+        samples: Vec<Vec<T>>,
+    ) -> Result<Vec<T>, Box<dyn Error>> {
         Util::_interleave(&samples)
     }
 
-    fn _deinterleave<T: Copy + Default>(samples: &[T], channels: u16) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
+    fn _deinterleave<T: Copy + Default>(
+        samples: &[T],
+        channels: u16,
+    ) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
         if samples.is_empty() {
             return Err("Samples is empty".into());
         }
