@@ -2,8 +2,9 @@ use std::error::Error;
 use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 
 use rubato::{
-    FastFixedIn, FftFixedInOut, PolynomialDegree, SincFixedIn, SincInterpolationParameters,
-    SincInterpolationType, VecResampler as RubatoResampler, WindowFunction,
+    FastFixedIn, FftFixedInOut, PolynomialDegree, SincFixedIn, SincFixedOut,
+    SincInterpolationParameters, SincInterpolationType, VecResampler as RubatoResampler,
+    WindowFunction,
 };
 
 use super::util::Util;
@@ -40,86 +41,81 @@ impl Resampler {
             return Ok(());
         }
 
-        let n_channels = signal.channels as usize;
-        let n_frames = signal.len() / n_channels;
+        let n_frames = signal.len() / signal.channels as usize;
 
-        let samples_f64 = signal
+        let samples_f64: Vec<f64> = signal
             .samples
             .iter()
             .map(|sample| f64::from_sample(*sample))
             .collect();
 
-        let deinterleaved = Util::into_deinterleave(samples_f64, n_channels as u16)?;
+        let mut new_deinterleaved = vec![
+            Vec::with_capacity(
+                n_frames * new_sample_rate as usize / signal.sample_rate as usize
+            );
+            signal.channels as usize
+        ];
 
         let mut resampler: Box<dyn RubatoResampler<f64>> = match self.resample_type {
             ResampleType::Fft => {
-                Resampler::_resampler_fft(signal, new_sample_rate, n_channels as u16)?
+                Resampler::_resampler_fft(signal, new_sample_rate, signal.channels)?
             }
             ResampleType::SincVeryHighQuality => {
-                Resampler::_resampler_sinc_vhq(signal, new_sample_rate, n_channels as u16)?
+                Resampler::_resampler_sinc_vhq(signal, new_sample_rate, signal.channels)?
             }
             ResampleType::SincHighQuality => {
-                Resampler::_resampler_sinc_hq(signal, new_sample_rate, n_channels as u16)?
+                Resampler::_resampler_sinc_hq(signal, new_sample_rate, signal.channels)?
             }
             ResampleType::SincMediumQuality => {
-                Resampler::_resampler_sinc_mq(signal, new_sample_rate, n_channels as u16)?
+                Resampler::_resampler_sinc_mq(signal, new_sample_rate, signal.channels)?
             }
             ResampleType::SincLowQuality => {
-                Resampler::_resampler_sinc_lq(signal, new_sample_rate, n_channels as u16)?
+                Resampler::_resampler_sinc_lq(signal, new_sample_rate, signal.channels)?
             }
             ResampleType::Fastest => {
-                Resampler::_resampler_fastest(signal, new_sample_rate, n_channels as u16)?
+                Resampler::_resampler_fastest(signal, new_sample_rate, signal.channels)?
             }
         };
 
-        let mut input_buffer = resampler.input_buffer_allocate(true);
+        let input_size = resampler.input_frames_max();
+        let output_size = input_size * new_sample_rate as usize / signal.sample_rate as usize;
+
         let mut output_buffer = resampler.output_buffer_allocate(true);
 
-        let input_size = input_buffer[0].len();
-        let output_size = output_buffer[0].len();
+        let input_iter = samples_f64.chunks_exact(input_size * signal.channels as usize);
 
-        println!("Input {}, Output {}", input_size, output_size);
+        let mut last_input_buffer = Util::deinterleave(input_iter.remainder(), signal.channels)?;
 
-        let mut new_deinterleaved = vec![
-            Vec::with_capacity(
-                n_frames * output_size / input_size
-            );
-            n_channels
-        ];
-
-        println!("New_deinterleaved capacity: {}", new_deinterleaved[0].capacity());
-
-        let mut current_input_size = input_size;
-        let mut current_output_size = output_size;
-
-        for chunk_index in (0..n_frames).step_by(input_size) {
-            if chunk_index + input_size > n_frames {
-                current_input_size = n_frames - chunk_index;
-                current_output_size =
-                    current_input_size * output_size / input_size;
-            }
-
-            for channel_index in 0..n_channels {
-                input_buffer[channel_index][0..current_input_size].copy_from_slice(
-                    &deinterleaved[channel_index][chunk_index..chunk_index + current_input_size],
-                );
-
-                for index in current_input_size..input_size {
-                    input_buffer[channel_index][index] = 0.0;
-                }
-            }
+        for input in input_iter {
+            let input_buffer = Util::deinterleave(input, signal.channels)?;
 
             resampler.process_into_buffer(&input_buffer, &mut output_buffer, None)?;
 
-            println!("{}", current_output_size);
-
-            for channel_index in 0..n_channels {
+            for (channel_index, channel) in output_buffer.iter().enumerate() {
                 new_deinterleaved[channel_index].extend(
-                    output_buffer[channel_index][0..current_output_size]
+                    channel[..output_size]
                         .iter()
                         .map(|sample| S::from_sample(*sample)),
                 );
             }
+        }
+
+        let last_input_size = last_input_buffer[0].len();
+        let last_output_size =
+            last_input_size * new_sample_rate as usize / signal.sample_rate as usize;
+
+        for channel in last_input_buffer.iter_mut() {
+            channel.extend_from_slice(&vec![0.0; input_size - last_input_size]);
+        }
+
+        resampler.process_into_buffer(&last_input_buffer, &mut output_buffer, None)?;
+
+        for (channel_index, channel) in output_buffer.iter().enumerate() {
+            new_deinterleaved[channel_index].extend(
+                channel[..last_output_size]
+                    .iter()
+                    .map(|sample| S::from_sample(*sample)),
+            );
         }
 
         let new_samples = Util::into_interleave(new_deinterleaved)?;
@@ -142,7 +138,7 @@ impl Resampler {
         let resampler = Box::new(FftFixedInOut::<f64>::new(
             signal.sample_rate as usize,
             new_sample_rate as usize,
-            1024,
+            2048,
             channels as usize,
         )?);
 
@@ -160,7 +156,7 @@ impl Resampler {
     {
         let params = SincInterpolationParameters {
             sinc_len: 256,
-            f_cutoff: 2.0,
+            f_cutoff: 0.95,
             interpolation: SincInterpolationType::Cubic,
             oversampling_factor: 128,
             window: WindowFunction::BlackmanHarris2,

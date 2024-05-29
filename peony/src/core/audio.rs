@@ -34,7 +34,7 @@ where
         self.samples.len()
     }
 
-    pub fn total_duration(&self) -> Duration {
+    pub fn duration(&self) -> Duration {
         Duration::from_secs_f64(
             self.samples.len() as f64 / (self.channels as f64 * self.sample_rate as f64),
         )
@@ -92,6 +92,67 @@ where
         resampler.resample(self, new_sample_rate)?;
 
         Ok(())
+    }
+
+    pub fn tone(frequency: f64, sample_rate: u32, duration: Duration) -> Signal<S> {
+        let ts = 1.0 / sample_rate as f64;
+
+        let length = (duration.as_secs_f64() * sample_rate as f64) as u64;
+
+        let samples = (0..length)
+            .map(|n| S::from_sample((2.0 * std::f64::consts::PI * frequency * n as f64 * ts).cos()))
+            .collect();
+
+        Signal {
+            samples,
+            channels: 1,
+            sample_rate,
+        }
+    }
+
+    pub fn chirp(
+        freq1: f64,
+        freq2: f64,
+        sample_rate: u32,
+        duration: Duration,
+        linear: bool,
+    ) -> Signal<S> {
+        let ts = 1.0 / sample_rate as f64;
+
+        let length = (duration.as_secs_f64() * sample_rate as f64) as u64;
+
+        let samples = if linear {
+            (0..length)
+                .map(|n| {
+                    S::from_sample(
+                        (2.0 * std::f64::consts::PI
+                            * (freq1 + (freq2 - freq1) * n as f64 * ts / duration.as_secs_f64())
+                            * n as f64
+                            * ts)
+                            .cos(),
+                    )
+                })
+                .collect()
+        } else {
+            (0..length)
+                .map(|n| {
+                    S::from_sample(
+                        (2.0 * std::f64::consts::PI
+                            * (freq1
+                                * (freq2 / freq1).powf(n as f64 * ts / duration.as_secs_f64())
+                                * n as f64
+                                * ts))
+                            .cos(),
+                    )
+                })
+                .collect()
+        };
+
+        Signal {
+            samples,
+            channels: 1,
+            sample_rate,
+        }
     }
 }
 
@@ -169,7 +230,7 @@ where
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        Some(self.signal.total_duration())
+        Some(self.signal.duration())
     }
 }
 
@@ -177,32 +238,42 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rodio::Sink;
+
     use super::*;
 
     #[test]
     fn tests() {
-        let mut signal: Signal<f32> = Signal::load(
-            "Shape of You.wav",
-            Duration::from_secs(15),
-            Some(Duration::from_secs(10)),
-        )
-        .unwrap();
+        // let mut signal: Signal<f32> = Signal::load(
+        //     "Shape of You.wav",
+        //     Duration::from_secs(0),
+        //     Some(Duration::from_secs(100)),
+        // )
+        // .unwrap();
 
-        signal.to_mono();
+        // signal.to_mono();
 
-        signal.resample(22050, ResampleType::SincVeryHighQuality).unwrap();
+        // signal.resample(60000, ResampleType::SincVeryHighQuality).unwrap();
 
-        signal.sample_rate = 22265;
+        // let signal: Signal<f32> =
+        //     Signal::chirp(440.0, 880.0, 22050, Duration::from_secs(10), false);
 
-        println!("Main: {} {}", signal.samples.len(), signal.samples.capacity());
-        println!("Duration: {:?}", signal.total_duration());
+        // for i in 0..10 {
+        //     print!("{} ", signal.samples[i]);
+        // }
+        // println!();
 
-        let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
+        // println!(
+        //     "Length: {}, Duration: {:?}",
+        //     signal.len(),
+        //     signal.duration()
+        // );
 
-        let source = signal.rodio_source::<f32>();
+        // let source = signal.rodio_source::<f32>();
 
-        let _ = stream_handle.play_raw(source.convert_samples());
-
-        std::thread::sleep(std::time::Duration::from_secs(10));
+        // let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
+        // let sink = Sink::try_new(&stream_handle).unwrap();
+        // sink.append(source);
+        // sink.sleep_until_end()
     }
 }

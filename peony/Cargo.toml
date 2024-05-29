@@ -12,6 +12,7 @@ opt-level = 1
 
 [dependencies]
 cpal = "0.15.3"
+lazy_static = "1.4.0"
 rodio = "0.18.0"
 rubato = "0.15.0"
 symphonia = { version = "0.5.4", features = ["all"] }
