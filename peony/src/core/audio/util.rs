@@ -1,81 +1,71 @@
 use std::error::Error;
 
-//////////////////////////////////////////////////  Util  //////////////////////////////////////////////////
-
-pub struct Util;
-
-impl Util {
-    fn _interleave<T: Copy + Default>(samples: &[Vec<T>]) -> Result<Vec<T>, Box<dyn Error>> {
-        if samples.is_empty() {
-            return Err("Samples is empty".into());
-        }
-
-        let n_channels = samples.len();
-        let n_frames = samples[0].len();
-
-        for channel in samples {
-            if n_frames != channel.len() {
-                return Err("Channels have different lengths".into());
-            }
-        }
-
-        let mut interleaved = vec![Default::default(); n_channels * n_frames];
-
-        for (channel_index, channel) in samples.iter().enumerate() {
-            for (frame_index, sample) in channel.iter().enumerate() {
-                interleaved[frame_index * n_channels + channel_index] = *sample;
-            }
-        }
-
-        Ok(interleaved)
+fn _interleave<T: Copy + Default>(samples: &[Vec<T>]) -> Result<Vec<T>, Box<dyn Error>> {
+    if samples.is_empty() {
+        return Err("Samples is empty".into());
     }
 
-    pub fn interleave<T: Copy + Default>(samples: &[Vec<T>]) -> Result<Vec<T>, Box<dyn Error>> {
-        Util::_interleave(samples)
-    }
+    let channels = samples.len();
+    let frames = samples[0].len();
 
-    pub fn into_interleave<T: Copy + Default>(
-        samples: Vec<Vec<T>>,
-    ) -> Result<Vec<T>, Box<dyn Error>> {
-        Util::_interleave(&samples)
-    }
-
-    fn _deinterleave<T: Copy + Default>(
-        samples: &[T],
-        channels: u16,
-    ) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
-        if samples.is_empty() {
-            return Err("Samples is empty".into());
+    for channel in samples {
+        if frames != channel.len() {
+            return Err("Channels have different lengths".into());
         }
+    }
 
-        let n_channels = channels as usize;
+    let mut interleaved = vec![Default::default(); channels * frames];
 
-        if samples.len() % n_channels != 0 {
-            return Err("Samples length not divisible by channels".into());
+    for (channel_index, channel) in samples.iter().enumerate() {
+        for (frame_index, sample) in channel.iter().enumerate() {
+            interleaved[frame_index * channels + channel_index] = *sample;
         }
-
-        let n_frames = samples.len() / n_channels;
-
-        let mut deinterleaved = vec![Vec::with_capacity(n_frames); n_channels];
-
-        for (channel_index, channel_samples) in deinterleaved.iter_mut().enumerate() {
-            channel_samples.extend(samples.iter().skip(channel_index).step_by(n_channels));
-        }
-
-        Ok(deinterleaved)
     }
 
-    pub fn deinterleave<T: Copy + Default>(
-        samples: &[T],
-        channels: u16,
-    ) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
-        Util::_deinterleave(samples, channels)
+    Ok(interleaved)
+}
+
+pub fn interleave<T: Copy + Default>(samples: &[Vec<T>]) -> Result<Vec<T>, Box<dyn Error>> {
+    _interleave(samples)
+}
+
+pub fn into_interleave<T: Copy + Default>(samples: Vec<Vec<T>>) -> Result<Vec<T>, Box<dyn Error>> {
+    _interleave(&samples)
+}
+
+fn _deinterleave<T: Copy + Default>(
+    samples: &[T],
+    channels: usize,
+) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
+    if samples.is_empty() {
+        return Err("Samples is empty".into());
     }
 
-    pub fn into_deinterleave<T: Copy + Default>(
-        samples: Vec<T>,
-        channels: u16,
-    ) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
-        Util::_deinterleave(&samples, channels)
+    if samples.len() % channels != 0 {
+        return Err("Samples length not divisible by channels".into());
     }
+
+    let frames = samples.len() / channels;
+
+    let mut deinterleaved = vec![Vec::with_capacity(frames); channels];
+
+    for (channel_index, channel_samples) in deinterleaved.iter_mut().enumerate() {
+        channel_samples.extend(samples.iter().skip(channel_index).step_by(channels));
+    }
+
+    Ok(deinterleaved)
+}
+
+pub fn deinterleave<T: Copy + Default>(
+    samples: &[T],
+    channels: usize,
+) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
+    _deinterleave(samples, channels)
+}
+
+pub fn into_deinterleave<T: Copy + Default>(
+    samples: Vec<T>,
+    channels: usize,
+) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
+    _deinterleave(&samples, channels)
 }

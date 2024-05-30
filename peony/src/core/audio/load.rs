@@ -13,6 +13,7 @@ use symphonia::core::units::Time;
 use symphonia::default::{get_codecs, get_probe};
 
 use super::Signal;
+use super::util::into_deinterleave;
 
 //////////////////////////////////////////////////  SignalLoader  //////////////////////////////////////////////////
 
@@ -122,8 +123,7 @@ where
         }
 
         Ok(Signal {
-            samples,
-            channels,
+            samples: into_deinterleave(samples, channels)?,
             sample_rate,
         })
     }

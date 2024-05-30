@@ -16,26 +16,22 @@ macro_rules! impl_samples {
         $(
             impl Samples for Signal<$t1> {
                 fn to_mono(&mut self) {
-                    if self.channels == 1 {
+                    if self.channels() == 1 {
                         return;
                     }
 
-                    let channels: usize = self.channels as usize;
-                    let mut sum: $t2 = Default::default();
-
                     for index in 0..self.len() {
-                        sum += <$t2>::from_sample(self.samples[index]);
+                        let mut sum: $t2 = Default::default();
 
-                        if index % channels == channels - 1 {
-                            self.samples[index / channels] = <$t1>::from_sample(sum / channels as $t2);
-                            sum = Default::default();
+                        for ch in 0..self.channels() {
+                            sum += <$t2>::from_sample(self.samples[ch][index]);
                         }
+
+                        self.samples[0][index] = <$t1>::from_sample(sum / self.channels() as $t2);
                     }
 
-                    self.samples.truncate(self.samples.len() / channels);
+                    self.samples.truncate(1);
                     self.samples.shrink_to_fit();
-
-                    self.channels = 1;
                 }
             }
         )*

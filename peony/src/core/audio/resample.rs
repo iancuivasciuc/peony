@@ -2,12 +2,11 @@ use std::error::Error;
 use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 
 use rubato::{
-    FastFixedIn, FftFixedInOut, PolynomialDegree, SincFixedIn, SincFixedOut,
-    SincInterpolationParameters, SincInterpolationType, VecResampler as RubatoResampler,
-    WindowFunction,
+    FastFixedIn, FftFixedInOut, PolynomialDegree, SincFixedIn, SincInterpolationParameters,
+    SincInterpolationType, VecResampler as RubatoResampler, WindowFunction,
 };
 
-use super::util::Util;
+use super::util::{deinterleave, into_interleave};
 use super::Signal;
 
 pub enum ResampleType {
@@ -84,10 +83,10 @@ impl Resampler {
 
         let input_iter = samples_f64.chunks_exact(input_size * signal.channels as usize);
 
-        let mut last_input_buffer = Util::deinterleave(input_iter.remainder(), signal.channels)?;
+        let mut last_input_buffer = deinterleave(input_iter.remainder(), signal.channels)?;
 
         for input in input_iter {
-            let input_buffer = Util::deinterleave(input, signal.channels)?;
+            let input_buffer = deinterleave(input, signal.channels)?;
 
             resampler.process_into_buffer(&input_buffer, &mut output_buffer, None)?;
 
@@ -118,7 +117,7 @@ impl Resampler {
             );
         }
 
-        let new_samples = Util::into_interleave(new_deinterleaved)?;
+        let new_samples = into_interleave(new_deinterleaved)?;
 
         signal.samples = new_samples;
         signal.sample_rate = new_sample_rate;

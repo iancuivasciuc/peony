@@ -42,7 +42,10 @@ pub fn hz_to_note(frequency: f64) -> String {
 }
 
 pub fn hz_to_note_vec(frequencies: &[f64]) -> Vec<String> {
-    frequencies.iter().map(|frequency| hz_to_note(*frequency)).collect()
+    frequencies
+        .iter()
+        .map(|frequency| hz_to_note(*frequency))
+        .collect()
 }
 
 pub fn hz_to_midi(frequency: f64) -> f64 {
@@ -65,7 +68,9 @@ pub fn midi_to_hz_vec(midis: &[f64]) -> Vec<f64> {
 }
 
 pub fn midi_to_note(midi: f64) -> String {
-    const MIDI_MAP: [&str; 12] = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+    const MIDI_MAP: [&str; 12] = [
+        "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
+    ];
 
     let midi = midi.round();
     let note = MIDI_MAP[midi.rem_euclid(12.0) as usize].to_string();
@@ -93,7 +98,7 @@ pub fn note_to_midi(note: &str) -> Result<f64, Box<dyn Error>> {
         Some(ch) => match NOTE_MAP.get(&ch) {
             Some(value) => *value,
             None => return Err("Invalid note format".into()),
-        }
+        },
         None => return Err("Note is empty".into()),
     };
 
@@ -101,7 +106,7 @@ pub fn note_to_midi(note: &str) -> Result<f64, Box<dyn Error>> {
         Some(ch) => match ACC_MAP.get(&ch) {
             Some(value) => (*value, 2),
             None => (0, 1),
-        }
+        },
         None => return Ok(letter as f64 + 12.0),
     };
 
@@ -161,7 +166,10 @@ pub fn hz_to_octs(frequency: f64) -> f64 {
 }
 
 pub fn hz_to_octs_vec(frequencies: &[f64]) -> Vec<f64> {
-    frequencies.iter().map(|frequency| hz_to_octs(*frequency)).collect()
+    frequencies
+        .iter()
+        .map(|frequency| hz_to_octs(*frequency))
+        .collect()
 }
 
 pub fn octs_to_hz(oct: f64) -> f64 {
@@ -179,7 +187,10 @@ pub fn a4_to_tuning(frequency: f64, bins_per_octave: Option<u16>) -> f64 {
 }
 
 pub fn a4_to_tuning_vec(frequencies: &[f64], bins_per_octave: Option<u16>) -> Vec<f64> {
-    frequencies.iter().map(|frequency| a4_to_tuning(*frequency, bins_per_octave)).collect()
+    frequencies
+        .iter()
+        .map(|frequency| a4_to_tuning(*frequency, bins_per_octave))
+        .collect()
 }
 
 pub fn tuning_to_a4(tuning: f64, bins_per_octave: Option<u16>) -> f64 {
@@ -189,7 +200,10 @@ pub fn tuning_to_a4(tuning: f64, bins_per_octave: Option<u16>) -> f64 {
 }
 
 pub fn tuning_to_a4_vec(tunings: &[f64], bins_per_octave: Option<u16>) -> Vec<f64> {
-    tunings.iter().map(|tuning| tuning_to_a4(*tuning, bins_per_octave)).collect()
+    tunings
+        .iter()
+        .map(|tuning| tuning_to_a4(*tuning, bins_per_octave))
+        .collect()
 }
 
 mod tests {
@@ -216,7 +230,10 @@ mod tests {
         assert_eq!(note_to_midi("G𝄪6").unwrap(), 93.0);
         assert_eq!(note_to_midi("B𝄫6").unwrap(), 93.0);
 
-        assert_eq!(note_to_midi_vec(&["C1", "E1", "G1"]).unwrap(), [24.0, 28.0, 31.0]);
+        assert_eq!(
+            note_to_midi_vec(&["C1", "E1", "G1"]).unwrap(),
+            [24.0, 28.0, 31.0]
+        );
     }
 
     #[test]

@@ -6,12 +6,12 @@ use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 use rodio::{Sample as RodioSample, Source};
 
 mod load;
-mod resample;
+// mod resample;
 mod samples;
 mod util;
 
 use load::SignalLoader;
-use resample::{ResampleType, Resampler};
+// use resample::{ResampleType, Resampler};
 use samples::Samples;
 
 //////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////
@@ -20,8 +20,7 @@ pub struct Signal<S>
 where
     S: SymphoniaSample,
 {
-    pub samples: Vec<S>,
-    pub channels: u16,
+    pub samples: Vec<Vec<S>>,
     pub sample_rate: u32,
 }
 
@@ -31,12 +30,16 @@ where
 {
     //  Utility functions
     pub fn len(&self) -> usize {
+        self.samples[0].len()
+    }
+
+    pub fn channels(&self) -> usize {
         self.samples.len()
     }
 
     pub fn duration(&self) -> Duration {
         Duration::from_secs_f64(
-            self.samples.len() as f64 / (self.channels as f64 * self.sample_rate as f64),
+            self.len() as f64 / self.sample_rate as f64,
         )
     }
 
@@ -68,31 +71,31 @@ where
         Self::load(path, Duration::ZERO, None)
     }
 
-    pub fn rodio_source<R>(self) -> SignalRodioSource<S, R>
-    where
-        R: RodioSample + FromSample<S>,
-    {
-        SignalRodioSource {
-            signal: self,
-            index: 0,
-            _marker: std::marker::PhantomData,
-        }
-    }
+    // pub fn rodio_source<R>(self) -> SignalRodioSource<S, R>
+    // where
+    //     R: RodioSample + FromSample<S>,
+    // {
+    //     SignalRodioSource {
+    //         signal: self,
+    //         index: 0,
+    //         _marker: std::marker::PhantomData,
+    //     }
+    // }
 
-    pub fn resample(
-        &mut self,
-        new_sample_rate: u32,
-        resample_type: ResampleType,
-    ) -> Result<(), Box<dyn Error>>
-    where
-        f64: symphonia::core::conv::FromSample<S>,
-    {
-        let resampler = Resampler::new(resample_type);
+    // pub fn resample(
+    //     &mut self,
+    //     new_sample_rate: u32,
+    //     resample_type: ResampleType,
+    // ) -> Result<(), Box<dyn Error>>
+    // where
+    //     f64: symphonia::core::conv::FromSample<S>,
+    // {
+    //     let resampler = Resampler::new(resample_type);
 
-        resampler.resample(self, new_sample_rate)?;
+    //     resampler.resample(self, new_sample_rate)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub fn tone(frequency: f64, sample_rate: u32, duration: Duration) -> Signal<S> {
         let ts = 1.0 / sample_rate as f64;
@@ -104,8 +107,7 @@ where
             .collect();
 
         Signal {
-            samples,
-            channels: 1,
+            samples: vec![samples],
             sample_rate,
         }
     }
@@ -149,8 +151,7 @@ where
         };
 
         Signal {
-            samples,
-            channels: 1,
+            samples: vec![samples],
             sample_rate,
         }
     }
@@ -158,81 +159,81 @@ where
 
 //////////////////////////////////////////////////  SignalRodioSource  //////////////////////////////////////////////////
 
-pub struct SignalRodioSource<S, R>
-where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
-{
-    pub signal: Signal<S>,
-    pub index: usize,
-    pub _marker: std::marker::PhantomData<R>,
-}
+// pub struct SignalRodioSource<S, R>
+// where
+//     S: SymphoniaSample,
+//     R: RodioSample + FromSample<S>,
+// {
+//     pub signal: Signal<S>,
+//     pub index: usize,
+//     pub _marker: std::marker::PhantomData<R>,
+// }
 
-impl<S, R> SignalRodioSource<S, R>
-where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
-{
-    pub fn inner(self) -> Signal<S> {
-        self.signal
-    }
-}
+// impl<S, R> SignalRodioSource<S, R>
+// where
+//     S: SymphoniaSample,
+//     R: RodioSample + FromSample<S>,
+// {
+//     pub fn inner(self) -> Signal<S> {
+//         self.signal
+//     }
+// }
 
-impl<S, R> Iterator for SignalRodioSource<S, R>
-where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
-{
-    type Item = R;
+// impl<S, R> Iterator for SignalRodioSource<S, R>
+// where
+//     S: SymphoniaSample,
+//     R: RodioSample + FromSample<S>,
+// {
+//     type Item = R;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.signal.len() {
-            self.index += 1;
+//     fn next(&mut self) -> Option<Self::Item> {
+//         if self.index < self.signal.len() {
+//             self.index += 1;
 
-            Some(<R as FromSample<S>>::from_sample(
-                self.signal.samples[self.index - 1],
-            ))
-        } else {
-            None
-        }
-    }
+//             Some(<R as FromSample<S>>::from_sample(
+//                 self.signal.samples[self.index - 1],
+//             ))
+//         } else {
+//             None
+//         }
+//     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.index - self.signal.len(),
-            Some(self.index - self.signal.len()),
-        )
-    }
-}
+//     fn size_hint(&self) -> (usize, Option<usize>) {
+//         (
+//             self.index - self.signal.len(),
+//             Some(self.index - self.signal.len()),
+//         )
+//     }
+// }
 
-impl<S, R> ExactSizeIterator for SignalRodioSource<S, R>
-where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
-{
-}
+// impl<S, R> ExactSizeIterator for SignalRodioSource<S, R>
+// where
+//     S: SymphoniaSample,
+//     R: RodioSample + FromSample<S>,
+// {
+// }
 
-impl<S, R> Source for SignalRodioSource<S, R>
-where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
-{
-    fn current_frame_len(&self) -> Option<usize> {
-        Some(self.signal.samples.len() / self.signal.channels as usize)
-    }
+// impl<S, R> Source for SignalRodioSource<S, R>
+// where
+//     S: SymphoniaSample,
+//     R: RodioSample + FromSample<S>,
+// {
+//     fn current_frame_len(&self) -> Option<usize> {
+//         Some(self.signal.samples.len() / self.signal.channels as usize)
+//     }
 
-    fn channels(&self) -> u16 {
-        self.signal.channels
-    }
+//     fn channels(&self) -> u16 {
+//         self.signal.channels
+//     }
 
-    fn sample_rate(&self) -> u32 {
-        self.signal.sample_rate
-    }
+//     fn sample_rate(&self) -> u32 {
+//         self.signal.sample_rate
+//     }
 
-    fn total_duration(&self) -> Option<Duration> {
-        Some(self.signal.duration())
-    }
-}
+//     fn total_duration(&self) -> Option<Duration> {
+//         Some(self.signal.duration())
+//     }
+// }
 
 //////////////////////////////////////////////////  SignalRodioSource  //////////////////////////////////////////////////
 
@@ -243,13 +244,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tests() {
-        // let mut signal: Signal<f32> = Signal::load(
-        //     "Shape of You.wav",
-        //     Duration::from_secs(0),
-        //     Some(Duration::from_secs(100)),
-        // )
-        // .unwrap();
+    fn load_test() {
+        let signal: Signal<f32> = Signal::load(
+            "Shape of You.wav",
+            Duration::from_secs(0),
+            Some(Duration::from_secs(100)),
+        )
+        .unwrap();
+
+        println!("{}, {}, {}, {:?}", signal.len(), signal.channels(), signal.sample_rate, signal.duration());
+
+        for ch in 0..signal.channels() {
+            for index in 0..10 {
+                print!("{:.4} ", signal.samples[ch][index]);
+            }
+            println!()
+        }
 
         // signal.to_mono();
 
