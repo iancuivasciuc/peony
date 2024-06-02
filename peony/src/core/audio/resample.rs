@@ -1,12 +1,12 @@
 use std::error::Error;
-use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 
 use rubato::{
-    FastFixedIn, FftFixedInOut, PolynomialDegree, SincFixedIn, SincInterpolationParameters,
-    SincInterpolationType, VecResampler as RubatoResampler, WindowFunction,
+    FastFixedIn, FftFixedInOut, PolynomialDegree, Sample as RubatoSample, SincFixedIn,
+    SincInterpolationParameters, SincInterpolationType, VecResampler as RubatoResampler,
+    WindowFunction,
 };
 
-use super::util::{deinterleave, into_interleave};
+use super::sample::Sample;
 use super::Signal;
 
 pub enum ResampleType {
@@ -18,24 +18,30 @@ pub enum ResampleType {
     Fastest,
 }
 
-pub struct Resampler {
+pub struct Resampler<S>
+where
+    S: Sample + RubatoSample,
+{
     pub resample_type: ResampleType,
+    _marker: std::marker::PhantomData<S>,
 }
 
-impl Resampler {
-    pub fn new(resample_type: ResampleType) -> Resampler {
-        Resampler { resample_type }
+impl<S> Resampler<S>
+where
+    S: Sample + RubatoSample,
+{
+    pub fn new(resample_type: ResampleType) -> Resampler<S> {
+        Resampler {
+            resample_type,
+            _marker: std::marker::PhantomData,
+        }
     }
 
-    pub fn resample<S>(
+    pub fn resample(
         &self,
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<(), Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
+    ) -> Result<(), Box<dyn Error>> {
         if signal.sample_rate == new_sample_rate {
             return Ok(());
         }
@@ -47,7 +53,7 @@ impl Resampler {
             signal.channels()
         ];
 
-        let mut resampler: Box<dyn RubatoResampler<f64>> = match self.resample_type {
+        let mut resampler: Box<dyn RubatoResampler<S>> = match self.resample_type {
             ResampleType::Fft => Resampler::_resampler_fft(signal, new_sample_rate)?,
             ResampleType::SincVeryHighQuality => {
                 Resampler::_resampler_sinc_vhq(signal, new_sample_rate)?
@@ -70,20 +76,14 @@ impl Resampler {
 
         for frame_index in (0..signal.len() - input_size).step_by(input_size) {
             for (channel_index, channel) in signal.samples.iter().enumerate() {
-                for index in 0..input_size {
-                    input_buffer[channel_index][index] =
-                        f64::from_sample(channel[frame_index + index]);
-                }
+                input_buffer[channel_index][..input_size]
+                    .copy_from_slice(&channel[frame_index..(frame_index + input_size)]);
             }
 
             resampler.process_into_buffer(&input_buffer, &mut output_buffer, None)?;
 
             for (channel_index, channel) in output_buffer.iter().enumerate() {
-                new_samples[channel_index].extend(
-                    channel[..output_size]
-                        .iter()
-                        .map(|sample| S::from_sample(*sample)),
-                );
+                new_samples[channel_index].extend(&channel[..output_size]);
             }
         }
 
@@ -96,24 +96,18 @@ impl Resampler {
             last_input_size * new_sample_rate as usize / signal.sample_rate as usize;
 
         for (channel_index, channel) in signal.samples.iter().enumerate() {
-            for index in 0..last_input_size {
-                input_buffer[channel_index][index] =
-                    f64::from_sample(channel[last_frame_index + index]);
-            }
+            input_buffer[channel_index][..last_input_size]
+                .copy_from_slice(&channel[last_frame_index..(last_frame_index + last_input_size)]);
 
             for index in last_input_size..input_size {
-                input_buffer[channel_index][index] = 0.0;
+                input_buffer[channel_index][index] = S::zero();
             }
         }
 
         resampler.process_into_buffer(&input_buffer, &mut output_buffer, None)?;
 
         for (channel_index, channel) in output_buffer.iter().enumerate() {
-            new_samples[channel_index].extend(
-                channel[..last_output_size]
-                    .iter()
-                    .map(|sample| S::from_sample(*sample)),
-            );
+            new_samples[channel_index].extend(&channel[..last_output_size]);
         }
 
         signal.samples = new_samples;
@@ -122,32 +116,24 @@ impl Resampler {
         Ok(())
     }
 
-    fn _resampler_fft<S>(
+    fn _resampler_fft(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
-        let resampler = Box::new(FftFixedInOut::<f64>::new(
+    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
+        let resampler = Box::new(FftFixedInOut::<S>::new(
             signal.sample_rate as usize,
             new_sample_rate as usize,
             2048,
-            signal.channels() as usize,
+            signal.channels(),
         )?);
 
         Ok(resampler)
     }
 
-    fn _resampler_sinc_vhq<S>(
+    fn _resampler_sinc_vhq(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
+    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
@@ -155,7 +141,7 @@ impl Resampler {
             oversampling_factor: 128,
             window: WindowFunction::BlackmanHarris2,
         };
-        let resampler = Box::new(SincFixedIn::<f64>::new(
+        let resampler = Box::new(SincFixedIn::<S>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -166,14 +152,10 @@ impl Resampler {
         Ok(resampler)
     }
 
-    fn _resampler_sinc_hq<S>(
+    fn _resampler_sinc_hq(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
+    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 128,
             f_cutoff: 0.95,
@@ -181,7 +163,7 @@ impl Resampler {
             oversampling_factor: 64,
             window: WindowFunction::Blackman2,
         };
-        let resampler = Box::new(SincFixedIn::<f64>::new(
+        let resampler = Box::new(SincFixedIn::<S>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -192,14 +174,10 @@ impl Resampler {
         Ok(resampler)
     }
 
-    fn _resampler_sinc_mq<S>(
+    fn _resampler_sinc_mq(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
+    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 64,
             f_cutoff: 0.90,
@@ -207,7 +185,7 @@ impl Resampler {
             oversampling_factor: 32,
             window: WindowFunction::Hann2,
         };
-        let resampler = Box::new(SincFixedIn::<f64>::new(
+        let resampler = Box::new(SincFixedIn::<S>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -218,14 +196,10 @@ impl Resampler {
         Ok(resampler)
     }
 
-    fn _resampler_sinc_lq<S>(
+    fn _resampler_sinc_lq(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
+    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 32,
             f_cutoff: 0.85,
@@ -233,7 +207,7 @@ impl Resampler {
             oversampling_factor: 16,
             window: WindowFunction::Hann2,
         };
-        let resampler = Box::new(SincFixedIn::<f64>::new(
+        let resampler = Box::new(SincFixedIn::<S>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -244,15 +218,11 @@ impl Resampler {
         Ok(resampler)
     }
 
-    fn _resampler_fastest<S>(
+    fn _resampler_fastest(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
-    where
-        S: SymphoniaSample,
-        f64: symphonia::core::conv::FromSample<S>,
-    {
-        let resampler = Box::new(FastFixedIn::<f64>::new(
+    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
+        let resampler = Box::new(FastFixedIn::<S>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             PolynomialDegree::Linear,

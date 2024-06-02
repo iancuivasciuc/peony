@@ -12,6 +12,7 @@ use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 use symphonia::default::{get_codecs, get_probe};
 
+use super::sample::Sample;
 use super::util::into_deinterleave;
 use super::Signal;
 
@@ -19,7 +20,7 @@ use super::Signal;
 
 pub struct SignalLoader<S>
 where
-    S: SymphoniaSample,
+    S: Sample + SymphoniaSample,
 {
     pub path: String,
     pub offset: Duration,
@@ -29,7 +30,7 @@ where
 
 impl<S> SignalLoader<S>
 where
-    S: SymphoniaSample,
+    S: Sample + SymphoniaSample,
 {
     fn n_frames(&self, all_frames: u64, sample_rate: u32) -> u64 {
         let mut frames = all_frames - (self.offset.as_secs_f64() * sample_rate as f64) as u64;

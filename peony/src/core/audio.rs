@@ -1,26 +1,26 @@
 use std::error::Error;
 use std::time::Duration;
 
-use ::realfft::num_complex::Complex;
-use realfft::{num_complex::ComplexFloat, RealFftPlanner};
+use realfft::{num_complex::ComplexFloat, FftNum, RealFftPlanner};
+use rodio::{Sample as RodioSample, Source};
+use rubato::Sample as RubatoSample;
 use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 
-use rodio::{Sample as RodioSample, Source};
-
-mod load;
-mod resample;
-mod samples;
-mod util;
+pub mod load;
+pub mod resample;
+pub mod sample;
+pub mod util;
 
 use load::SignalLoader;
 use resample::{ResampleType, Resampler};
+use sample::Sample;
 
 //////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////
 
 #[derive(Clone)]
 pub struct Signal<S>
 where
-    S: SymphoniaSample,
+    S: Sample,
 {
     pub samples: Vec<Vec<S>>,
     pub sample_rate: u32,
@@ -28,52 +28,68 @@ where
 
 impl<S> Signal<S>
 where
-    S: SymphoniaSample,
+    S: Sample,
 {
-    //  Utility functions
-    pub fn len(&self) -> usize {
-        self.samples[0].len()
+    pub fn new(samples: Vec<Vec<S>>, sample_rate: u32) -> Result<Signal<S>, Box<dyn Error>> {
+        if samples.is_empty() {
+            return Err("Samples is empty".into());
+        }
+
+        let len = samples[0].len();
+
+        for channel in samples.iter().skip(1) {
+            if channel.len() != len {
+                return Err("Channels have different lengths".into());
+            }
+        }
+
+        Ok(Signal {
+            samples,
+            sample_rate,
+        })
     }
 
+    // Information
+    #[inline(always)]
     pub fn channels(&self) -> usize {
         self.samples.len()
     }
 
+    #[inline(always)]
+    pub fn has_channels(&self) -> bool {
+        !self.samples.is_empty()
+    }
+
+    #[allow(clippy::len_without_is_empty)] 
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.samples[0].len()
+    }
+
+    #[inline(always)]
+    pub fn has_samples(&self) -> bool {
+        self.has_channels() && !self.samples[0].is_empty()
+    }
+
+    #[inline(always)]
     pub fn duration(&self) -> Duration {
         Duration::from_secs_f64(self.len() as f64 / self.sample_rate as f64)
     }
 
+    #[inline(always)]
     pub fn bits_per_sample(&self) -> usize {
         std::mem::size_of::<S>() * 8
     }
 
+    #[inline(always)]
     pub fn data_type(&self) -> &'static str {
         std::any::type_name::<S>()
     }
 
-    //  True functions
-    pub fn load(
-        path: &str,
-        offset: Duration,
-        duration: Option<Duration>,
-    ) -> Result<Signal<S>, Box<dyn Error>> {
-        let loader = SignalLoader {
-            path: path.to_string(),
-            offset,
-            duration,
-            _marker: std::marker::PhantomData,
-        };
-
-        loader.load()
-    }
-
-    pub fn load_default(path: &str) -> Result<Signal<S>, Box<dyn Error>> {
-        Self::load(path, Duration::ZERO, None)
-    }
-
+    #[must_use]
     pub fn rodio_source<R>(self) -> SignalRodioSource<S, R>
     where
-        R: RodioSample + FromSample<S>,
+        R: RodioSample,
     {
         SignalRodioSource {
             signal: self,
@@ -82,22 +98,19 @@ where
         }
     }
 
-    pub fn to_mono(&mut self)
-    where
-        f32: symphonia::core::conv::FromSample<S>,
-    {
-        if self.channels() == 1 {
+    pub fn to_mono(&mut self) {
+        if self.channels() <= 1 {
             return;
         }
 
         for index in 0..self.len() {
-            let sum: f32 = self
-                .samples
-                .iter()
-                .map(|channel| f32::from_sample(channel[index]))
-                .sum();
+            let mut sum = S::zero();
 
-            self.samples[0][index] = S::from_sample(sum / self.channels() as f32);
+            for channel in &self.samples {
+                sum = sum + channel[index];
+            }
+
+            self.samples[0][index] = sum / S::from_usize(self.channels()).unwrap();
         }
 
         self.samples.truncate(1);
@@ -120,89 +133,7 @@ where
     //     self._to_mono();
     // }
 
-    pub fn resample(
-        &mut self,
-        new_sample_rate: u32,
-        resample_type: ResampleType,
-    ) -> Result<(), Box<dyn Error>>
-    where
-        f64: symphonia::core::conv::FromSample<S>,
-    {
-        let resampler = Resampler::new(resample_type);
-
-        resampler.resample(self, new_sample_rate)?;
-
-        Ok(())
-    }
-
-    // pub fn resample(
-    //     &self,
-    //     new_sample_rate: u32,
-    //     resample_type: ResampleType,
-    // ) -> Result<Signal<S>, Box<dyn Error>>
-    // where
-    //     f64: symphonia::core::conv::FromSample<S>,
-    // {
-    //     let mut new_signal = self.clone();
-    //     new_signal._resample(new_sample_rate, resample_type)?;
-    //     Ok(new_signal)
-    // }
-
-    // pub fn resample_in_place(
-    //     &mut self,
-    //     new_sample_rate: u32,
-    //     resample_type: ResampleType,
-    // ) -> Result<(), Box<dyn Error>>
-    // where
-    //     f64: symphonia::core::conv::FromSample<S>,
-    // {
-    //     self._resample(new_sample_rate, resample_type)
-    // }
-
-    pub fn autocorrelate(&self, max_len: Option<usize>) -> Vec<Vec<f32>>
-    where
-        f32: symphonia::core::conv::FromSample<S>,
-    {
-        let len = match max_len {
-            Some(size) => std::cmp::min(size, self.len()),
-            None => self.len(),
-        };
-
-        let padded_len = (self.len() * 2 - 1).next_power_of_two();
-
-        let mut planner = RealFftPlanner::<f32>::new();
-
-        let rfft = planner.plan_fft_forward(padded_len);
-        let irfft = planner.plan_fft_inverse(padded_len);
-
-        let mut autocorr = vec![vec![0.0; padded_len]; self.channels()];
-
-        let mut spectrum = rfft.make_output_vec();
-
-        for (channel_index, channel) in self.samples.iter().enumerate() {
-            autocorr[channel_index]
-                .iter_mut()
-                .zip(channel.iter())
-                .for_each(|(autocorr_sample, sample)| *autocorr_sample = f32::from_sample(*sample));
-
-            rfft.process(&mut autocorr[channel_index], &mut spectrum)
-                .unwrap();
-
-            spectrum.iter_mut().for_each(|freq| *freq *= freq.conj());
-
-            irfft
-                .process(&mut spectrum, &mut autocorr[channel_index])
-                .unwrap();
-
-            autocorr[channel_index].truncate(len);
-            autocorr[channel_index]
-                .iter_mut()
-                .for_each(|sample| *sample /= padded_len as f32);
-        }
-
-        autocorr
-    }
-
+    #[must_use]
     pub fn lpc(&self, order: usize) -> Vec<Vec<f64>>
     where
         f64: symphonia::core::conv::FromSample<S>,
@@ -217,7 +148,7 @@ where
         let mut b = vec![0.0; self.len()];
 
         // Mu
-        let mut mu = 0.0;
+        let mut mu;
 
         // Denominator
         let mut dk = 0.0;
@@ -274,16 +205,16 @@ where
 
     pub fn _zero_crossings(&self, threshold: Option<S>) -> Vec<Vec<bool>> {
         let mut crossings = vec![vec![false; self.len()]; self.channels()];
-        let threshold = threshold.unwrap_or_default();
+        let threshold = threshold.unwrap_or(S::zero());
 
         let mut prev = true;
         let mut curr;
 
         for (channel_index, channel) in self.samples.iter().enumerate() {
             for (index, sample) in channel.iter().enumerate() {
-                curr = *sample >= S::MID;
+                curr = *sample >= S::zero();
 
-                if !curr && (S::MID - *sample <= threshold) {
+                if !curr && (S::zero() - *sample <= threshold) {
                     curr = true;
                 }
 
@@ -298,47 +229,284 @@ where
         crossings
     }
 
+    #[must_use]
     pub fn zero_crossings(&self) -> Vec<Vec<bool>> {
         self._zero_crossings(None)
     }
 
+    #[must_use]
     pub fn zero_crossings_with_threshold(&self, threshold: S) -> Vec<Vec<bool>> {
         self._zero_crossings(Some(threshold))
     }
 
-    pub fn mu_compress(&mut self, mu: u16)
-    where
-        f32: symphonia::core::conv::FromSample<S>,
-    {
-        let mu = mu as f32;
-        let mu_log = (1.0 + mu).ln();
+    #[must_use]
+    pub fn mu_compress(&mut self, mu: u16) -> Signal<S> {
+        let mut new_samples = vec![Vec::with_capacity(self.len()); self.channels()];
 
-        self.samples.iter_mut().for_each(|channel| {
-            channel.iter_mut().for_each(|sample| {
-                let sign = if *sample < S::MID { -1.0} else { 1.0 };
-                let abs = f32::from_sample(*sample).abs();
-                *sample = S::from_sample(sign * (1.0 + mu * abs).ln() / mu_log);
-            });
-        });
+        let mu_s = S::from_u16(mu).unwrap();
+        let mu_log = (S::one() + mu_s).ln();
+
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sign = if *sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                sign * (S::from(1.0).unwrap() + mu_s * sample.abs()).ln() / mu_log
+            }).collect();
+        }
+
+        Signal {
+            samples: new_samples,
+            sample_rate: self.sample_rate,
+        }
     }
 
-    pub fn mu_compress_quantized(&self, mu: u16) -> Vec<Vec<i8>>
-    where f32: symphonia::core::conv::FromSample<S>,
-    {
+    #[must_use]
+    pub fn mu_compress_to_u8(&self, mu: u8) -> Vec<Vec<u8>> {
         let mut new_samples = vec![Vec::with_capacity(self.len()); self.channels()];
+
+        let mu_s = S::from_u8(mu).unwrap();
+        let mu_log = (S::from(1.0).unwrap() + mu_s).ln();
+
+        let linspace: Vec<S> = (0..=mu as usize + 1).map(|i| {
+            S::from_usize(i).unwrap() * S::from_f64(2.0).unwrap() / mu_s - S::one()
+        }).collect();
+
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sign = if *sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                let compressed = sign * (S::from(1.0).unwrap() + mu_s * sample.abs()).ln() / mu_log;
+                let clamped = compressed.max(S::from(i8::MIN).unwrap()).min(S::from(i8::MAX).unwrap());
+
+                let bin = linspace.binary_search_by(|&val| {
+                    if clamped < val { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+                }).unwrap_or_else(|x| x);
+
+                bin as u8
+            }).collect();
+        }
 
         new_samples
     }
 
+    #[must_use]
+    pub fn mu_compress_to_u16(&self, mu: u16) -> Vec<Vec<u16>> {
+        let mut new_samples = vec![Vec::with_capacity(self.len()); self.channels()];
 
+        let mu_s = S::from_u16(mu).unwrap();
+        let mu_log = (S::from(1.0).unwrap() + mu_s).ln();
 
-    pub fn tone(frequency: f32, sample_rate: u32, duration: Duration) -> Signal<S> {
-        let ts = 1.0 / sample_rate as f32;
+        let linspace: Vec<S> = (0..=mu as usize + 1).map(|i| {
+            S::from_usize(i).unwrap() * S::from_f64(2.0).unwrap() / mu_s - S::one()
+        }).collect();
 
-        let length = (duration.as_secs_f32() * sample_rate as f32) as u64;
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sign = if *sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                let compressed = sign * (S::from(1.0).unwrap() + mu_s * sample.abs()).ln() / mu_log;
+                let clamped = compressed.max(S::from(i8::MIN).unwrap()).min(S::from(i8::MAX).unwrap());
+
+                let bin = linspace.binary_search_by(|&val| {
+                    if clamped < val { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+                }).unwrap_or_else(|x| x);
+
+                bin as u16
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    #[must_use]
+    pub fn mu_compress_to_i8(&self, mu: u8) -> Vec<Vec<i8>> {
+        let mut new_samples = vec![Vec::with_capacity(self.len()); self.channels()];
+
+        let mu_s = S::from_u8(mu).unwrap();
+        let mu_log = (S::from(1.0).unwrap() + mu_s).ln();
+
+        let linspace: Vec<S> = (0..=mu as usize + 1).map(|i| {
+            S::from_usize(i).unwrap() * S::from_f64(2.0).unwrap() / mu_s - S::one()
+        }).collect();
+
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sign = if *sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                let compressed = sign * (S::from(1.0).unwrap() + mu_s * sample.abs()).ln() / mu_log;
+                let clamped = compressed.max(S::from(i8::MIN).unwrap()).min(S::from(i8::MAX).unwrap());
+
+                let bin = linspace.binary_search_by(|&val| {
+                    if clamped < val { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+                }).unwrap_or_else(|x| x);
+
+                (bin as i32 - ((mu as usize + 1) / 2) as i32) as i8
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    #[must_use]
+    pub fn mu_compress_to_i16(&self, mu: u16) -> Vec<Vec<i16>> {
+        let mut new_samples = vec![Vec::with_capacity(self.len()); self.channels()];
+
+        let mu_s = S::from_u16(mu).unwrap();
+        let mu_log = (S::from(1.0).unwrap() + mu_s).ln();
+
+        let linspace: Vec<S> = (0..=mu as usize + 1).map(|i| {
+            S::from_usize(i).unwrap() * S::from_f64(2.0).unwrap() / mu_s - S::one()
+        }).collect();
+
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sign = if *sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                let compressed = sign * (S::from(1.0).unwrap() + mu_s * sample.abs()).ln() / mu_log;
+                let clamped = compressed.max(S::from(i8::MIN).unwrap()).min(S::from(i8::MAX).unwrap());
+
+                let bin = linspace.binary_search_by(|&val| {
+                    if clamped < val { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Less }
+                }).unwrap_or_else(|x| x);
+
+                (bin as i32 - ((mu as usize + 1) / 2) as i32) as i16
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    #[must_use]
+    pub fn mu_expand(&mut self, mu: u16) -> Signal<S> {
+        let mut new_samples = vec![Vec::with_capacity(self.len()); self.channels()];
+
+        let mu_s = S::from_u16(mu).unwrap();
+        let mu_div = S::one() / mu_s;
+        let mu_add = S::one() + mu_s;
+
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sign = if *sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                sign * mu_div * (mu_add.powf(*sample) - S::one())
+            }).collect();
+        }
+
+        Signal {
+            samples: new_samples,
+            sample_rate: self.sample_rate,
+        }
+    }
+
+    #[must_use]
+    pub fn mu_expand_from_u8(samples: Vec<Vec<u8>>, mu: u8) -> Vec<Vec<S>> {
+        let channels = samples.len();
+
+        let mut new_samples = vec![Vec::new(); channels];
+
+        let mu_s = S::from_u8(mu).unwrap();
+        let mu_div = S::one() / mu_s;
+        let mu_add = S::one() + mu_s;
+
+        for (channel_index, channel) in samples.iter().enumerate() {
+            new_samples[channel_index].reserve_exact(channel.len());
+
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sample = S::from_u8(*sample).unwrap() * S::from(2).unwrap() / S::from_usize(mu as usize + 1).unwrap() - S::one();
+
+                let sign = if sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                sign * mu_div * (mu_add.powf(sample) - S::one())
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    #[must_use]
+    pub fn mu_expand_from_u16(samples: Vec<Vec<u16>>, mu: u16) -> Vec<Vec<S>> {
+        let channels = samples.len();
+
+        let mut new_samples = vec![Vec::new(); channels];
+
+        let mu_s = S::from_u16(mu).unwrap();
+        let mu_div = S::one() / mu_s;
+        let mu_add = S::one() + mu_s;
+
+        for (channel_index, channel) in samples.iter().enumerate() {
+            new_samples[channel_index].reserve_exact(channel.len());
+
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sample = S::from_u16(*sample).unwrap() * S::from(2).unwrap() / S::from_usize(mu as usize + 1).unwrap() - S::one();
+
+                let sign = if sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                sign * mu_div * (mu_add.powf(sample) - S::one())
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    #[must_use]
+    pub fn mu_expand_from_i8(samples: Vec<Vec<i8>>, mu: u8) -> Vec<Vec<S>> {
+        let channels = samples.len();
+
+        let mut new_samples = vec![Vec::new(); channels];
+
+        let mu_s = S::from_u8(mu).unwrap();
+        let mu_div = S::one() / mu_s;
+        let mu_add = S::one() + mu_s;
+
+        for (channel_index, channel) in samples.iter().enumerate() {
+            new_samples[channel_index].reserve_exact(channel.len());
+
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sample = S::from_i8(*sample).unwrap() * S::from(2).unwrap() / S::from_usize(mu as usize + 1).unwrap();
+
+                let sign = if sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                sign * mu_div * (mu_add.powf(sample) - S::one())
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    #[must_use]
+    pub fn mu_expand_from_i16(samples: Vec<Vec<i16>>, mu: u16) -> Vec<Vec<S>> {
+        let channels = samples.len();
+
+        let mut new_samples = vec![Vec::new(); channels];
+
+        let mu_s = S::from_u16(mu).unwrap();
+        let mu_div = S::one() / mu_s;
+        let mu_add = S::one() + mu_s;
+
+        for (channel_index, channel) in samples.iter().enumerate() {
+            new_samples[channel_index].reserve_exact(channel.len());
+
+            new_samples[channel_index] = channel.iter().map(|sample| {
+                let sample = S::from_i16(*sample).unwrap() * S::from(2).unwrap() / S::from_usize(mu as usize + 1).unwrap();
+
+                let sign = if sample < S::zero() { S::from(-1.0).unwrap() } else { S::from(1.0).unwrap() };
+
+                sign * mu_div * (mu_add.powf(sample) - S::one())
+            }).collect();
+        }
+
+        new_samples
+    }
+
+    pub fn tone(frequency: S, sample_rate: u32, duration: Duration) -> Signal<S> {
+        let ts = S::one() / S::from_u32(sample_rate).unwrap();
+
+        let length = (duration.as_secs_f64() * sample_rate as f64) as u64;
 
         let samples = (0..length)
-            .map(|n| S::from_sample((2.0 * std::f32::consts::PI * frequency * n as f32 * ts).cos()))
+            .map(|n| {
+                (S::from(2.0).unwrap() * S::PI() * frequency * S::from_u64(n).unwrap() * ts).cos()
+            })
             .collect();
 
         Signal {
@@ -348,39 +516,42 @@ where
     }
 
     pub fn chirp(
-        freq1: f32,
-        freq2: f32,
+        freq1: S,
+        freq2: S,
         sample_rate: u32,
         duration: Duration,
         linear: bool,
     ) -> Signal<S> {
-        let ts = 1.0 / sample_rate as f32;
+        let ts = S::one() / S::from_u32(sample_rate).unwrap();
 
-        let length = (duration.as_secs_f32() * sample_rate as f32) as u64;
+        let length = (duration.as_secs_f64() * sample_rate as f64) as u64;
 
         let samples = if linear {
             (0..length)
                 .map(|n| {
-                    S::from_sample(
-                        (2.0 * std::f32::consts::PI
-                            * (freq1 + (freq2 - freq1) * n as f32 * ts / duration.as_secs_f32())
-                            * n as f32
-                            * ts)
-                            .cos(),
-                    )
+                    (S::from(2.0).unwrap()
+                        * S::PI()
+                        * (freq1
+                            + (freq2 - freq1) * S::from_u64(n).unwrap() * ts
+                                / S::from_f64(duration.as_secs_f64()).unwrap())
+                        * S::from_u64(n).unwrap()
+                        * ts)
+                        .cos()
                 })
                 .collect()
         } else {
             (0..length)
                 .map(|n| {
-                    S::from_sample(
-                        (2.0 * std::f32::consts::PI
-                            * (freq1
-                                * (freq2 / freq1).powf(n as f32 * ts / duration.as_secs_f32())
-                                * n as f32
-                                * ts))
-                            .cos(),
-                    )
+                    (S::from(2.0).unwrap()
+                        * S::PI()
+                        * (freq1
+                            * (freq2 / freq1).powf(
+                                S::from_u64(n).unwrap() * ts
+                                    / S::from_f64(duration.as_secs_f64()).unwrap(),
+                            )
+                            * S::from_u64(n).unwrap()
+                            * ts))
+                        .cos()
                 })
                 .collect()
         };
@@ -392,23 +563,136 @@ where
     }
 }
 
+impl<S> Signal<S>
+where
+    S: Sample + SymphoniaSample,
+{
+    pub fn load(
+        path: &str,
+        offset: Duration,
+        duration: Option<Duration>,
+    ) -> Result<Signal<S>, Box<dyn Error>> {
+        let loader = SignalLoader {
+            path: path.to_string(),
+            offset,
+            duration,
+            _marker: std::marker::PhantomData,
+        };
+
+        loader.load()
+    }
+
+    pub fn load_default(path: &str) -> Result<Signal<S>, Box<dyn Error>> {
+        Self::load(path, Duration::ZERO, None)
+    }
+}
+
+impl<S> Signal<S>
+where
+    S: Sample + RubatoSample,
+{
+    pub fn resample(
+        &mut self,
+        new_sample_rate: u32,
+        resample_type: ResampleType,
+    ) -> Result<(), Box<dyn Error>>
+    where {
+        let resampler = Resampler::new(resample_type);
+
+        resampler.resample(self, new_sample_rate)?;
+
+        Ok(())
+    }
+
+    // pub fn resample(
+    //     &self,
+    //     new_sample_rate: u32,
+    //     resample_type: ResampleType,
+    // ) -> Result<Signal<S>, Box<dyn Error>>
+    // where
+    //     f64: symphonia::core::conv::FromSample<S>,
+    // {
+    //     let mut new_signal = self.clone();
+    //     new_signal._resample(new_sample_rate, resample_type)?;
+    //     Ok(new_signal)
+    // }
+
+    // pub fn resample_in_place(
+    //     &mut self,
+    //     new_sample_rate: u32,
+    //     resample_type: ResampleType,
+    // ) -> Result<(), Box<dyn Error>>
+    // where
+    //     f64: symphonia::core::conv::FromSample<S>,
+    // {
+    //     self._resample(new_sample_rate, resample_type)
+    // }
+}
+
+impl<S> Signal<S>
+where
+    S: Sample + FftNum,
+{
+    pub fn autocorrelate(&self, max_len: Option<usize>) -> Vec<Vec<S>> {
+        let len = match max_len {
+            Some(size) => std::cmp::min(size, self.len()),
+            None => self.len(),
+        };
+
+        let padded_len = (self.len() * 2 - 1).next_power_of_two();
+
+        let mut planner = RealFftPlanner::<S>::new();
+
+        let rfft = planner.plan_fft_forward(padded_len);
+        let irfft = planner.plan_fft_inverse(padded_len);
+
+        let mut autocorr = vec![vec![S::zero(); padded_len]; self.channels()];
+
+        let mut spectrum = rfft.make_output_vec();
+
+        for (channel_index, channel) in self.samples.iter().enumerate() {
+            autocorr[channel_index].copy_from_slice(channel);
+
+            rfft.process(&mut autocorr[channel_index], &mut spectrum)
+                .unwrap();
+
+            spectrum
+                .iter_mut()
+                .for_each(|freq| *freq = *freq * freq.conj());
+
+            irfft
+                .process(&mut spectrum, &mut autocorr[channel_index])
+                .unwrap();
+
+            autocorr[channel_index].truncate(len);
+
+            autocorr[channel_index]
+                .iter_mut()
+                .for_each(|sample| *sample = *sample / S::from_usize(padded_len).unwrap());
+        }
+
+        autocorr
+    }
+}
+
 //////////////////////////////////////////////////  SignalRodioSource  //////////////////////////////////////////////////
 
 pub struct SignalRodioSource<S, R>
 where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
+    S: Sample,
+    R: RodioSample,
 {
     pub signal: Signal<S>,
     pub index: usize,
-    pub _marker: std::marker::PhantomData<R>,
+    _marker: std::marker::PhantomData<R>,
 }
 
 impl<S, R> SignalRodioSource<S, R>
 where
-    S: SymphoniaSample,
-    R: RodioSample + FromSample<S>,
+    S: Sample,
+    R: RodioSample,
 {
+    #[inline(always)]
     pub fn inner(self) -> Signal<S> {
         self.signal
     }
@@ -416,7 +700,7 @@ where
 
 impl<S, R> Iterator for SignalRodioSource<S, R>
 where
-    S: SymphoniaSample,
+    S: Sample + SymphoniaSample,
     R: RodioSample + FromSample<S>,
 {
     type Item = R;
@@ -445,14 +729,14 @@ where
 
 impl<S, R> ExactSizeIterator for SignalRodioSource<S, R>
 where
-    S: SymphoniaSample,
+    S: Sample + SymphoniaSample,
     R: RodioSample + FromSample<S>,
 {
 }
 
 impl<S, R> Source for SignalRodioSource<S, R>
 where
-    S: SymphoniaSample,
+    S: Sample + SymphoniaSample,
     R: RodioSample + FromSample<S>,
 {
     fn current_frame_len(&self) -> Option<usize> {
@@ -556,7 +840,7 @@ mod tests {
 
     #[test]
     fn zc_test() {
-        let mut signal: Signal<i32> = Signal::load(
+        let mut signal: Signal<f32> = Signal::load(
             "Shape of You.wav",
             Duration::ZERO,
             Some(Duration::from_secs(10)),
@@ -606,6 +890,7 @@ mod tests {
 
         signal.to_mono();
 
+        print!("Original signal: ");
         for channel in signal.samples.iter() {
             for sample in channel.iter().take(10) {
                 print!("{:.4} ", sample);
@@ -613,9 +898,20 @@ mod tests {
             println!();
         }
 
-        signal.mu_compress(255);
+        let compressed = signal.mu_compress(255);
 
-        for channel in signal.samples {
+        print!("Compressed signal: ");
+        for channel in compressed.samples.iter() {
+            for sample in channel.iter().take(10) {
+                print!("{:.4} ", sample);
+            }
+            println!();
+        }
+
+        let quantized = signal.mu_compress_to_i16(1023);
+
+        print!("Quantized signal: ");
+        for channel in quantized.iter() {
             for sample in channel.iter().take(10) {
                 print!("{:.4} ", sample);
             }

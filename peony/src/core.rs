@@ -1,2 +1,2 @@
-mod audio;
-mod conv;
+pub mod audio;
+pub mod conv;

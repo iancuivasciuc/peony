@@ -11,8 +11,8 @@ opt-level = 1
 opt-level = 1
 
 [dependencies]
-cpal = "0.15.3"
 lazy_static = "1.4.0"
+num-traits = "0.2.19"
 realfft = "3.3.0"
 rodio = "0.18.1"
 rubato = "0.15.0"

@@ -206,9 +206,8 @@ pub fn tuning_to_a4_vec(tunings: &[f64], bins_per_octave: Option<u16>) -> Vec<f6
         .collect()
 }
 
+#[cfg(test)]
 mod tests {
-    use rodio::Sink;
-
     use super::*;
 
     #[test]
