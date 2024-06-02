@@ -40,58 +40,46 @@ impl Resampler {
             return Ok(());
         }
 
-        let n_frames = signal.len() / signal.channels as usize;
-
-        let samples_f64: Vec<f64> = signal
-            .samples
-            .iter()
-            .map(|sample| f64::from_sample(*sample))
-            .collect();
-
-        let mut new_deinterleaved = vec![
+        let mut new_samples = vec![
             Vec::with_capacity(
-                n_frames * new_sample_rate as usize / signal.sample_rate as usize
+                signal.len() * new_sample_rate as usize / signal.sample_rate as usize
             );
-            signal.channels as usize
+            signal.channels()
         ];
 
         let mut resampler: Box<dyn RubatoResampler<f64>> = match self.resample_type {
-            ResampleType::Fft => {
-                Resampler::_resampler_fft(signal, new_sample_rate, signal.channels)?
-            }
+            ResampleType::Fft => Resampler::_resampler_fft(signal, new_sample_rate)?,
             ResampleType::SincVeryHighQuality => {
-                Resampler::_resampler_sinc_vhq(signal, new_sample_rate, signal.channels)?
+                Resampler::_resampler_sinc_vhq(signal, new_sample_rate)?
             }
             ResampleType::SincHighQuality => {
-                Resampler::_resampler_sinc_hq(signal, new_sample_rate, signal.channels)?
+                Resampler::_resampler_sinc_hq(signal, new_sample_rate)?
             }
             ResampleType::SincMediumQuality => {
-                Resampler::_resampler_sinc_mq(signal, new_sample_rate, signal.channels)?
+                Resampler::_resampler_sinc_mq(signal, new_sample_rate)?
             }
-            ResampleType::SincLowQuality => {
-                Resampler::_resampler_sinc_lq(signal, new_sample_rate, signal.channels)?
-            }
-            ResampleType::Fastest => {
-                Resampler::_resampler_fastest(signal, new_sample_rate, signal.channels)?
-            }
+            ResampleType::SincLowQuality => Resampler::_resampler_sinc_lq(signal, new_sample_rate)?,
+            ResampleType::Fastest => Resampler::_resampler_fastest(signal, new_sample_rate)?,
         };
 
         let input_size = resampler.input_frames_max();
         let output_size = input_size * new_sample_rate as usize / signal.sample_rate as usize;
 
+        let mut input_buffer = resampler.input_buffer_allocate(true);
         let mut output_buffer = resampler.output_buffer_allocate(true);
 
-        let input_iter = samples_f64.chunks_exact(input_size * signal.channels as usize);
-
-        let mut last_input_buffer = deinterleave(input_iter.remainder(), signal.channels)?;
-
-        for input in input_iter {
-            let input_buffer = deinterleave(input, signal.channels)?;
+        for frame_index in (0..signal.len() - input_size).step_by(input_size) {
+            for (channel_index, channel) in signal.samples.iter().enumerate() {
+                for index in 0..input_size {
+                    input_buffer[channel_index][index] =
+                        f64::from_sample(channel[frame_index + index]);
+                }
+            }
 
             resampler.process_into_buffer(&input_buffer, &mut output_buffer, None)?;
 
             for (channel_index, channel) in output_buffer.iter().enumerate() {
-                new_deinterleaved[channel_index].extend(
+                new_samples[channel_index].extend(
                     channel[..output_size]
                         .iter()
                         .map(|sample| S::from_sample(*sample)),
@@ -99,25 +87,34 @@ impl Resampler {
             }
         }
 
-        let last_input_size = last_input_buffer[0].len();
+        //  Last input buffer with a size smaller than input size
+
+        let last_frame_index = signal.len() / input_size * input_size;
+
+        let last_input_size = signal.len() - last_frame_index;
         let last_output_size =
             last_input_size * new_sample_rate as usize / signal.sample_rate as usize;
 
-        for channel in last_input_buffer.iter_mut() {
-            channel.extend_from_slice(&vec![0.0; input_size - last_input_size]);
+        for (channel_index, channel) in signal.samples.iter().enumerate() {
+            for index in 0..last_input_size {
+                input_buffer[channel_index][index] =
+                    f64::from_sample(channel[last_frame_index + index]);
+            }
+
+            for index in last_input_size..input_size {
+                input_buffer[channel_index][index] = 0.0;
+            }
         }
 
-        resampler.process_into_buffer(&last_input_buffer, &mut output_buffer, None)?;
+        resampler.process_into_buffer(&input_buffer, &mut output_buffer, None)?;
 
         for (channel_index, channel) in output_buffer.iter().enumerate() {
-            new_deinterleaved[channel_index].extend(
+            new_samples[channel_index].extend(
                 channel[..last_output_size]
                     .iter()
                     .map(|sample| S::from_sample(*sample)),
             );
         }
-
-        let new_samples = into_interleave(new_deinterleaved)?;
 
         signal.samples = new_samples;
         signal.sample_rate = new_sample_rate;
@@ -128,7 +125,6 @@ impl Resampler {
     fn _resampler_fft<S>(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-        channels: u16,
     ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
     where
         S: SymphoniaSample,
@@ -138,7 +134,7 @@ impl Resampler {
             signal.sample_rate as usize,
             new_sample_rate as usize,
             2048,
-            channels as usize,
+            signal.channels() as usize,
         )?);
 
         Ok(resampler)
@@ -147,7 +143,6 @@ impl Resampler {
     fn _resampler_sinc_vhq<S>(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-        channels: u16,
     ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
     where
         S: SymphoniaSample,
@@ -165,7 +160,7 @@ impl Resampler {
             1.0,
             params,
             2048,
-            channels as usize,
+            signal.channels(),
         )?);
 
         Ok(resampler)
@@ -174,7 +169,6 @@ impl Resampler {
     fn _resampler_sinc_hq<S>(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-        channels: u16,
     ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
     where
         S: SymphoniaSample,
@@ -192,7 +186,7 @@ impl Resampler {
             1.0,
             params,
             1024,
-            channels as usize,
+            signal.channels(),
         )?);
 
         Ok(resampler)
@@ -201,7 +195,6 @@ impl Resampler {
     fn _resampler_sinc_mq<S>(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-        channels: u16,
     ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
     where
         S: SymphoniaSample,
@@ -219,7 +212,7 @@ impl Resampler {
             1.0,
             params,
             1024,
-            channels as usize,
+            signal.channels(),
         )?);
 
         Ok(resampler)
@@ -228,7 +221,6 @@ impl Resampler {
     fn _resampler_sinc_lq<S>(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-        channels: u16,
     ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
     where
         S: SymphoniaSample,
@@ -246,7 +238,7 @@ impl Resampler {
             1.0,
             params,
             512,
-            channels as usize,
+            signal.channels(),
         )?);
 
         Ok(resampler)
@@ -255,7 +247,6 @@ impl Resampler {
     fn _resampler_fastest<S>(
         signal: &mut Signal<S>,
         new_sample_rate: u32,
-        channels: u16,
     ) -> Result<Box<dyn RubatoResampler<f64>>, Box<dyn Error>>
     where
         S: SymphoniaSample,
@@ -266,7 +257,7 @@ impl Resampler {
             1.0,
             PolynomialDegree::Linear,
             512,
-            channels as usize,
+            signal.channels(),
         )?);
 
         Ok(resampler)

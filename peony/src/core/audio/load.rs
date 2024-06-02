@@ -12,8 +12,8 @@ use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 use symphonia::default::{get_codecs, get_probe};
 
-use super::Signal;
 use super::util::into_deinterleave;
+use super::Signal;
 
 //////////////////////////////////////////////////  SignalLoader  //////////////////////////////////////////////////
 
@@ -53,7 +53,7 @@ where
             .codec_params
             .channels
             .ok_or("unknown channels")?
-            .count() as u16;
+            .count();
         let sample_rate = track
             .codec_params
             .sample_rate
