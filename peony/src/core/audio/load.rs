@@ -32,7 +32,7 @@ impl<S> SignalLoader<S>
 where
     S: Sample + SymphoniaSample,
 {
-    fn n_frames(&self, all_frames: u64, sample_rate: u32) -> u64 {
+    fn _n_frames(&self, all_frames: u64, sample_rate: u32) -> u64 {
         let mut frames = all_frames - (self.offset.as_secs_f64() * sample_rate as f64) as u64;
 
         if let Some(duration) = self.duration {
@@ -42,7 +42,7 @@ where
         frames
     }
 
-    fn decode_format(
+    fn _decode_format(
         &self,
         mut format: Box<dyn FormatReader>,
     ) -> Result<Signal<S>, Box<dyn Error>> {
@@ -60,7 +60,7 @@ where
             .sample_rate
             .ok_or("unknown sample rate")?;
 
-        let frames = self.n_frames(
+        let frames = self._n_frames(
             track.codec_params.n_frames.ok_or("unknown frames")?,
             sample_rate,
         );
@@ -129,14 +129,14 @@ where
         })
     }
 
-    pub fn load(self) -> Result<Signal<S>, Box<dyn Error>> {
-        let format = file_format(&self.path)?;
+    pub fn load(&self) -> Result<Signal<S>, Box<dyn Error>> {
+        let format = _file_format(&self.path)?;
 
-        self.decode_format(format)
+        self._decode_format(format)
     }
 }
 
-fn file_format(path: &str) -> Result<Box<dyn FormatReader>, Box<dyn Error>> {
+fn _file_format(path: &str) -> Result<Box<dyn FormatReader>, Box<dyn Error>> {
     let path = Path::new(path);
     let file = std::fs::File::open(path)?;
 
@@ -155,7 +155,7 @@ fn file_format(path: &str) -> Result<Box<dyn FormatReader>, Box<dyn Error>> {
 }
 
 pub fn get_file_duration(path: &str) -> Result<Duration, Box<dyn Error>> {
-    let format = file_format(path)?;
+    let format = _file_format(path)?;
 
     let track = format.default_track().unwrap();
 
@@ -174,7 +174,7 @@ pub fn get_file_duration(path: &str) -> Result<Duration, Box<dyn Error>> {
 }
 
 pub fn get_file_sample_rate(path: &str) -> Result<u32, Box<dyn Error>> {
-    let format = file_format(path)?;
+    let format = _file_format(path)?;
 
     let track = format.default_track().unwrap();
 

@@ -6,7 +6,7 @@ use rubato::{
     WindowFunction,
 };
 
-use super::sample::Sample;
+use super::sample::FloatSample;
 use super::Signal;
 
 pub enum ResampleType {
@@ -18,19 +18,19 @@ pub enum ResampleType {
     Fastest,
 }
 
-pub struct Resampler<S>
+pub struct Resampler<F>
 where
-    S: Sample + RubatoSample,
+    F: FloatSample + RubatoSample,
 {
     pub resample_type: ResampleType,
-    _marker: std::marker::PhantomData<S>,
+    _marker: std::marker::PhantomData<F>,
 }
 
-impl<S> Resampler<S>
+impl<F> Resampler<F>
 where
-    S: Sample + RubatoSample,
+    F: FloatSample + RubatoSample,
 {
-    pub fn new(resample_type: ResampleType) -> Resampler<S> {
+    pub fn new(resample_type: ResampleType) -> Resampler<F> {
         Resampler {
             resample_type,
             _marker: std::marker::PhantomData,
@@ -39,12 +39,15 @@ where
 
     pub fn resample(
         &self,
-        signal: &mut Signal<S>,
+        signal: &mut Signal<F>,
         new_sample_rate: u32,
     ) -> Result<(), Box<dyn Error>> {
         if signal.sample_rate == new_sample_rate {
             return Ok(());
         }
+
+        // Constants
+        let zero = F::zero();
 
         let mut new_samples = vec![
             Vec::with_capacity(
@@ -53,7 +56,7 @@ where
             signal.channels()
         ];
 
-        let mut resampler: Box<dyn RubatoResampler<S>> = match self.resample_type {
+        let mut resampler: Box<dyn RubatoResampler<F>> = match self.resample_type {
             ResampleType::Fft => Resampler::_resampler_fft(signal, new_sample_rate)?,
             ResampleType::SincVeryHighQuality => {
                 Resampler::_resampler_sinc_vhq(signal, new_sample_rate)?
@@ -100,7 +103,7 @@ where
                 .copy_from_slice(&channel[last_frame_index..(last_frame_index + last_input_size)]);
 
             for index in last_input_size..input_size {
-                input_buffer[channel_index][index] = S::zero();
+                input_buffer[channel_index][index] = zero;
             }
         }
 
@@ -117,10 +120,10 @@ where
     }
 
     fn _resampler_fft(
-        signal: &mut Signal<S>,
+        signal: &Signal<F>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
-        let resampler = Box::new(FftFixedInOut::<S>::new(
+    ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
+        let resampler = Box::new(FftFixedInOut::<F>::new(
             signal.sample_rate as usize,
             new_sample_rate as usize,
             2048,
@@ -131,9 +134,9 @@ where
     }
 
     fn _resampler_sinc_vhq(
-        signal: &mut Signal<S>,
+        signal: &Signal<F>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
+    ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
@@ -141,7 +144,7 @@ where
             oversampling_factor: 128,
             window: WindowFunction::BlackmanHarris2,
         };
-        let resampler = Box::new(SincFixedIn::<S>::new(
+        let resampler = Box::new(SincFixedIn::<F>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -153,9 +156,9 @@ where
     }
 
     fn _resampler_sinc_hq(
-        signal: &mut Signal<S>,
+        signal: &Signal<F>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
+    ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 128,
             f_cutoff: 0.95,
@@ -163,7 +166,7 @@ where
             oversampling_factor: 64,
             window: WindowFunction::Blackman2,
         };
-        let resampler = Box::new(SincFixedIn::<S>::new(
+        let resampler = Box::new(SincFixedIn::<F>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -175,9 +178,9 @@ where
     }
 
     fn _resampler_sinc_mq(
-        signal: &mut Signal<S>,
+        signal: &Signal<F>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
+    ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 64,
             f_cutoff: 0.90,
@@ -185,7 +188,7 @@ where
             oversampling_factor: 32,
             window: WindowFunction::Hann2,
         };
-        let resampler = Box::new(SincFixedIn::<S>::new(
+        let resampler = Box::new(SincFixedIn::<F>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -197,9 +200,9 @@ where
     }
 
     fn _resampler_sinc_lq(
-        signal: &mut Signal<S>,
+        signal: &Signal<F>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
+    ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 32,
             f_cutoff: 0.85,
@@ -207,7 +210,7 @@ where
             oversampling_factor: 16,
             window: WindowFunction::Hann2,
         };
-        let resampler = Box::new(SincFixedIn::<S>::new(
+        let resampler = Box::new(SincFixedIn::<F>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
@@ -219,10 +222,10 @@ where
     }
 
     fn _resampler_fastest(
-        signal: &mut Signal<S>,
+        signal: &Signal<F>,
         new_sample_rate: u32,
-    ) -> Result<Box<dyn RubatoResampler<S>>, Box<dyn Error>> {
-        let resampler = Box::new(FastFixedIn::<S>::new(
+    ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
+        let resampler = Box::new(FastFixedIn::<F>::new(
             new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             PolynomialDegree::Linear,

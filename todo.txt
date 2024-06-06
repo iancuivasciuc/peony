@@ -1,31 +1,12 @@
-Audio Processing Library (Python - Librosa, Python - PyDub)
-    - audio loading
-    - playback
-    - manipulation
-    - feature
-    - extraction
-    - signal processing
+Trait signal
 
-Submodules:
-    - beat - estimate tempo and detect beats
-    - core
-        - load audio from disks
-        - spectograms
-        - tools for music analysis
-    - decompose
-        - harmonic-percurssive source separation (HPSS)
-        - generic spectogram decomposition using matrix decomposition
-    - display
-        - visualization and display routines using matplotlib
-    - effects
-        - time-domain audio processing: pitch shifting and time stretching
-    - feature
-        - feature extraction and manipulation: chromagrams, MFCC
-        - delta features and memory embedding
-    - filters
-        - chroma, pseudo-CQT, CQT
-    - onset
-        - onset detection and onset strenght computation
-    - segment
-    - util
-        - normalizations, padding, centering
+Refactorizare, Signal fara sample_rate
+
+Trait Signal
+FloatSignal and QuantizedSignal
+
+Window Function
+
+STFT, ISTFT
+
+Si documentatie
