@@ -10,11 +10,9 @@ use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 
 pub mod load;
 pub mod resample;
-pub mod sample;
-pub mod util;
 
 use load::SignalLoader;
-use sample::{Sample, IntSample, FloatSample};
+use super::sample::{Sample, IntSample, FloatSample};
 use resample::{ResampleType, Resampler};
 
 //////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////

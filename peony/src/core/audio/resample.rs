@@ -6,7 +6,7 @@ use rubato::{
     WindowFunction,
 };
 
-use super::sample::FloatSample;
+use crate::core::sample::FloatSample;
 use super::Signal;
 
 pub enum ResampleType {

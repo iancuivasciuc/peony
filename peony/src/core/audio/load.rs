@@ -12,8 +12,8 @@ use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 use symphonia::default::{get_codecs, get_probe};
 
-use super::sample::Sample;
-use super::util::into_deinterleave;
+use crate::core::sample::Sample;
+use crate::core::util::into_deinterleave;
 use super::Signal;
 
 //////////////////////////////////////////////////  SignalLoader  //////////////////////////////////////////////////
