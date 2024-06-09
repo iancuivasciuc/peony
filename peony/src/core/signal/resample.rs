@@ -6,8 +6,8 @@ use rubato::{
     WindowFunction,
 };
 
-use crate::core::sample::FloatSample;
 use super::Signal;
+use crate::core::sample::FloatSample;
 
 pub enum ResampleType {
     Fft,
@@ -18,10 +18,11 @@ pub enum ResampleType {
     Fastest,
 }
 
-pub struct Resampler<F>
+pub(crate) struct Resampler<F>
 where
     F: FloatSample + RubatoSample,
 {
+    pub new_sample_rate: u32,
     pub resample_type: ResampleType,
     _marker: std::marker::PhantomData<F>,
 }
@@ -30,19 +31,16 @@ impl<F> Resampler<F>
 where
     F: FloatSample + RubatoSample,
 {
-    pub fn new(resample_type: ResampleType) -> Resampler<F> {
+    pub fn new(new_sample_rate: u32, resample_type: ResampleType) -> Resampler<F> {
         Resampler {
+            new_sample_rate,
             resample_type,
             _marker: std::marker::PhantomData,
         }
     }
 
-    pub fn resample(
-        &self,
-        signal: &mut Signal<F>,
-        new_sample_rate: u32,
-    ) -> Result<(), Box<dyn Error>> {
-        if signal.sample_rate == new_sample_rate {
+    pub fn resample(&self, signal: &mut Signal<F>) -> Result<(), Box<dyn Error>> {
+        if signal.sample_rate == self.new_sample_rate {
             return Ok(());
         }
 
@@ -51,33 +49,30 @@ where
 
         let mut new_samples = vec![
             Vec::with_capacity(
-                signal.len() * new_sample_rate as usize / signal.sample_rate as usize
+                signal.len() * self.new_sample_rate as usize / signal.sample_rate as usize
             );
             signal.channels()
         ];
 
         let mut resampler: Box<dyn RubatoResampler<F>> = match self.resample_type {
-            ResampleType::Fft => Resampler::_resampler_fft(signal, new_sample_rate)?,
-            ResampleType::SincVeryHighQuality => {
-                Resampler::_resampler_sinc_vhq(signal, new_sample_rate)?
-            }
-            ResampleType::SincHighQuality => {
-                Resampler::_resampler_sinc_hq(signal, new_sample_rate)?
-            }
-            ResampleType::SincMediumQuality => {
-                Resampler::_resampler_sinc_mq(signal, new_sample_rate)?
-            }
-            ResampleType::SincLowQuality => Resampler::_resampler_sinc_lq(signal, new_sample_rate)?,
-            ResampleType::Fastest => Resampler::_resampler_fastest(signal, new_sample_rate)?,
+            ResampleType::Fft => self._resampler_fft(signal)?,
+            ResampleType::SincVeryHighQuality => self._resampler_sinc_vhq(signal)?,
+            ResampleType::SincHighQuality => self._resampler_sinc_hq(signal)?,
+            ResampleType::SincMediumQuality => self._resampler_sinc_mq(signal)?,
+            ResampleType::SincLowQuality => self._resampler_sinc_lq(signal)?,
+            ResampleType::Fastest => self._resampler_fastest(signal)?,
         };
 
         let input_size = resampler.input_frames_max();
-        let output_size = input_size * new_sample_rate as usize / signal.sample_rate as usize;
+        let output_size = input_size * self.new_sample_rate as usize / signal.sample_rate as usize;
 
         let mut input_buffer = resampler.input_buffer_allocate(true);
         let mut output_buffer = resampler.output_buffer_allocate(true);
 
-        for frame_index in (0..signal.len() - input_size).step_by(input_size) {
+        let mut cnt = 0;
+        for frame_index in (0..=signal.len() - input_size).step_by(input_size) {
+            cnt = cnt.max(frame_index);
+
             for (channel_index, channel) in signal.samples.iter().enumerate() {
                 input_buffer[channel_index][..input_size]
                     .copy_from_slice(&channel[frame_index..(frame_index + input_size)]);
@@ -96,7 +91,12 @@ where
 
         let last_input_size = signal.len() - last_frame_index;
         let last_output_size =
-            last_input_size * new_sample_rate as usize / signal.sample_rate as usize;
+            last_input_size * self.new_sample_rate as usize / signal.sample_rate as usize;
+
+        println!(
+            "Last: Frame index: {}, Input Size: {}, Output Size: {}",
+            last_frame_index, last_output_size, last_input_size
+        );
 
         for (channel_index, channel) in signal.samples.iter().enumerate() {
             input_buffer[channel_index][..last_input_size]
@@ -114,18 +114,18 @@ where
         }
 
         signal.samples = new_samples;
-        signal.sample_rate = new_sample_rate;
+        signal.sample_rate = self.new_sample_rate;
 
         Ok(())
     }
 
     fn _resampler_fft(
+        &self,
         signal: &Signal<F>,
-        new_sample_rate: u32,
     ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let resampler = Box::new(FftFixedInOut::<F>::new(
             signal.sample_rate as usize,
-            new_sample_rate as usize,
+            self.new_sample_rate as usize,
             2048,
             signal.channels(),
         )?);
@@ -134,8 +134,8 @@ where
     }
 
     fn _resampler_sinc_vhq(
+        &self,
         signal: &Signal<F>,
-        new_sample_rate: u32,
     ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 256,
@@ -145,7 +145,7 @@ where
             window: WindowFunction::BlackmanHarris2,
         };
         let resampler = Box::new(SincFixedIn::<F>::new(
-            new_sample_rate as f64 / signal.sample_rate as f64,
+            self.new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
             2048,
@@ -156,8 +156,8 @@ where
     }
 
     fn _resampler_sinc_hq(
+        &self,
         signal: &Signal<F>,
-        new_sample_rate: u32,
     ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 128,
@@ -167,7 +167,7 @@ where
             window: WindowFunction::Blackman2,
         };
         let resampler = Box::new(SincFixedIn::<F>::new(
-            new_sample_rate as f64 / signal.sample_rate as f64,
+            self.new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
             1024,
@@ -178,8 +178,8 @@ where
     }
 
     fn _resampler_sinc_mq(
+        &self,
         signal: &Signal<F>,
-        new_sample_rate: u32,
     ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 64,
@@ -189,7 +189,7 @@ where
             window: WindowFunction::Hann2,
         };
         let resampler = Box::new(SincFixedIn::<F>::new(
-            new_sample_rate as f64 / signal.sample_rate as f64,
+            self.new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
             1024,
@@ -200,8 +200,8 @@ where
     }
 
     fn _resampler_sinc_lq(
+        &self,
         signal: &Signal<F>,
-        new_sample_rate: u32,
     ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let params = SincInterpolationParameters {
             sinc_len: 32,
@@ -211,7 +211,7 @@ where
             window: WindowFunction::Hann2,
         };
         let resampler = Box::new(SincFixedIn::<F>::new(
-            new_sample_rate as f64 / signal.sample_rate as f64,
+            self.new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             params,
             512,
@@ -222,11 +222,11 @@ where
     }
 
     fn _resampler_fastest(
+        &self,
         signal: &Signal<F>,
-        new_sample_rate: u32,
     ) -> Result<Box<dyn RubatoResampler<F>>, Box<dyn Error>> {
         let resampler = Box::new(FastFixedIn::<F>::new(
-            new_sample_rate as f64 / signal.sample_rate as f64,
+            self.new_sample_rate as f64 / signal.sample_rate as f64,
             1.0,
             PolynomialDegree::Linear,
             512,

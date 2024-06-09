@@ -1,7 +1,5 @@
 use std::error::Error;
 
-use num_traits::{Bounded, Num, NumCast, ToPrimitive};
-
 fn _interleave<T: Copy>(samples: &[Vec<T>]) -> Result<Vec<T>, Box<dyn Error>> {
     if samples.is_empty() {
         return Err("Samples is empty".into());
@@ -67,13 +65,4 @@ pub fn into_deinterleave<T: Copy>(
     channels: usize,
 ) -> Result<Vec<Vec<T>>, Box<dyn Error>> {
     _deinterleave(&samples, channels)
-}
-
-#[inline(always)]
-pub fn from_primitive<S, T>(value: T) -> S
-where
-    S: Num + Copy + NumCast + PartialOrd + Bounded,
-    T: ToPrimitive,
-{
-    S::from(value).expect("Conversion should not fail")
 }

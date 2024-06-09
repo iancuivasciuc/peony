@@ -2,17 +2,18 @@ use std::error::Error;
 use std::time::Duration;
 
 use num_traits::Zero;
-
-use realfft::{num_complex::ComplexFloat, FftNum, RealFftPlanner};
+use realfft::{FftNum, RealFftPlanner};
 use rodio::{Sample as RodioSample, Source};
 use rubato::Sample as RubatoSample;
 use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
+
+use super::sample::{FloatSample, IntSample, Sample};
+use super::spectrum::{stft::Stft, window::WindowType, Spectrum};
 
 pub mod load;
 pub mod resample;
 
 use load::SignalLoader;
-use super::sample::{Sample, IntSample, FloatSample};
 use resample::{ResampleType, Resampler};
 
 //////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////
@@ -55,14 +56,7 @@ where
     where
         S: SymphoniaSample,
     {
-        let loader = SignalLoader {
-            path: path.to_string(),
-            offset,
-            duration,
-            _marker: std::marker::PhantomData,
-        };
-
-        loader.load()
+        SignalLoader::new(path, offset, duration).load()
     }
 
     pub fn load_default(path: &str) -> Result<Self, Box<dyn Error>>
@@ -81,7 +75,6 @@ where
     pub fn has_channels(&self) -> bool {
         !self.samples.is_empty()
     }
-
 
     #[allow(clippy::len_without_is_empty)]
     #[inline(always)]
@@ -109,9 +102,9 @@ where
         Duration::from_secs_f64(self.len() as f64 / self.sample_rate as f64)
     }
 
-    fn _to_mono(&mut self) {
+    fn _mono(mut self) -> Self {
         if self.channels() <= 1 {
-            return;
+            return self;
         }
 
         // Constants
@@ -131,30 +124,39 @@ where
 
         self.samples.truncate(1);
         self.samples.shrink_to_fit();
+
+        self
     }
 
     #[must_use]
-    pub fn to_mono(&self) -> Signal<S> {
-        let mut new_signal = self.clone();
-
-        new_signal._to_mono();
-
-        new_signal
+    pub fn mono(&self) -> Self {
+        self.clone()._mono()
     }
 
-    pub fn to_mono_mut(&mut self) {
-        self._to_mono()
+    pub fn into_mono(self) -> Self {
+        self._mono()
     }
 
-    pub fn rodio_source<R>(self) -> SignalRodioSource<S, R>
+    fn _rodio_source<R>(self) -> SignalRodioSource<S, R>
     where
         R: RodioSample,
     {
-        SignalRodioSource {
-            signal: self,
-            index: 0,
-            _marker: std::marker::PhantomData,
-        }
+        SignalRodioSource::new(self)
+    }
+
+    #[must_use]
+    pub fn rodio_source<R>(&self) -> SignalRodioSource<S, R>
+    where
+        R: RodioSample,
+    {
+        self.clone()._rodio_source()
+    }
+
+    pub fn into_rodio_source<R>(self) -> SignalRodioSource<S, R>
+    where
+        R: RodioSample,
+    {
+        self._rodio_source()
     }
 }
 
@@ -165,40 +167,34 @@ where
     F: FloatSample,
 {
     fn _resample(
-        &mut self,
+        mut self,
         new_sample_rate: u32,
         resample_type: ResampleType,
-    ) -> Result<(), Box<dyn Error>>
+    ) -> Result<Self, Box<dyn Error>>
     where
         F: RubatoSample,
     {
-        let resampler = Resampler::new(resample_type);
+        Resampler::new(new_sample_rate, resample_type).resample(&mut self)?;
 
-        resampler.resample(self, new_sample_rate)?;
-
-        Ok(())
+        Ok(self)
     }
 
     pub fn resample(
         &self,
         new_sample_rate: u32,
         resample_type: ResampleType,
-    ) -> Result<Signal<F>, Box<dyn Error>>
+    ) -> Result<Self, Box<dyn Error>>
     where
         F: RubatoSample,
     {
-        let mut new_signal = self.clone();
-
-        new_signal._resample(new_sample_rate, resample_type)?;
-
-        Ok(new_signal)
+        self.clone()._resample(new_sample_rate, resample_type)
     }
 
-    pub fn resample_mut(
-        &mut self,
+    pub fn into_resample(
+        self,
         new_sample_rate: u32,
         resample_type: ResampleType,
-    ) -> Result<(), Box<dyn Error>>
+    ) -> Result<Self, Box<dyn Error>>
     where
         F: RubatoSample,
     {
@@ -354,7 +350,7 @@ where
         self._zero_crossings(Some(threshold))
     }
 
-    fn _mu_compress(&mut self, mu: usize) {
+    fn _mu_compress(mut self, mu: usize) -> Self {
         let zero = F::zero();
         let one = F::one();
 
@@ -368,22 +364,20 @@ where
                 *sample = sign * (one + mu * sample.abs()).ln() / mu_log;
             }
         }
+
+        self
     }
 
     #[must_use]
-    pub fn mu_compress(&self, mu: usize) -> Signal<F> {
-        let mut new_signal = self.clone();
-
-        new_signal._mu_compress(mu);
-
-        new_signal
+    pub fn mu_compress(&self, mu: usize) -> Self {
+        self.clone()._mu_compress(mu)
     }
 
-    pub fn mu_compress_mut(&mut self, mu: usize) {
+    pub fn into_mu_compress(self, mu: usize) -> Self {
         self._mu_compress(mu)
     }
 
-    pub fn mu_compress_to_quantized<I>(&self, mu: usize) -> Signal<I>
+    fn _mu_quantize<I>(self, mu: usize) -> Signal<I>
     where
         I: IntSample,
     {
@@ -402,7 +396,7 @@ where
             .map(|i| F::from_expect(i) * two / mu_f - one)
             .collect();
 
-        for (channel_index, channel) in self.samples.iter().enumerate() {
+        for (channel_index, channel) in self.samples.into_iter().enumerate() {
             new_samples[channel_index] = channel
                 .iter()
                 .map(|sample| {
@@ -441,7 +435,22 @@ where
         }
     }
 
-    fn _mu_expand(&mut self, mu: usize) {
+    #[must_use]
+    pub fn mu_quantize<I>(&self, mu: usize) -> Signal<I>
+    where
+        I: IntSample
+    {
+        self.clone()._mu_quantize(mu)
+    }
+
+    pub fn into_mu_quantize<I>(self, mu: usize) -> Signal<I>
+    where
+        I: IntSample
+    {
+        self._mu_quantize(mu)
+    }
+
+    fn _mu_expand(mut self, mu: usize) -> Self {
         let zero = F::zero();
         let one = F::one();
 
@@ -456,17 +465,15 @@ where
                 *sample = sign * mu_div * (mu_add.powf(sample.abs()) - one);
             }
         }
+
+        self
     }
 
-    pub fn mu_expand(&self, mu: usize) -> Signal<F> {
-        let mut new_signal = self.clone();
-
-        new_signal._mu_expand(mu);
-
-        new_signal
+    pub fn mu_expand(&self, mu: usize) -> Self {
+        self.clone()._mu_expand(mu)
     }
 
-    pub fn mu_expand_mut(&mut self, mu: usize) {
+    pub fn into_mu_expand(self, mu: usize) -> Self {
         self._mu_expand(mu)
     }
 
@@ -530,6 +537,29 @@ where
             sample_rate,
         }
     }
+
+    pub fn stft(
+        &self,
+        frame_len: usize,
+        hop_len: Option<usize>,
+        window_len: Option<usize>,
+        window_type: WindowType,
+        center: bool,
+    ) -> Spectrum<F>
+    where
+        F: FftNum,
+    {
+        let stft = Stft::new(frame_len, hop_len, window_len, window_type, center);
+
+        stft.stft(self)
+    }
+
+    pub fn stft_default(&self) -> Spectrum<F>
+    where
+        F: FftNum,
+    {
+        self.stft(2048, None, None, WindowType::Hann, true)
+    }
 }
 
 //////////////////////////////////////////////////  IntSignal  //////////////////////////////////////////////////
@@ -538,8 +568,7 @@ impl<I> Signal<I>
 where
     I: IntSample,
 {
-    #[must_use]
-    pub fn mu_expand_from_quantized<F>(&self, mu: usize) -> Signal<F>
+    pub fn _mu_dequantize<F>(self, mu: usize) -> Signal<F>
     where
         F: FloatSample,
     {
@@ -554,14 +583,14 @@ where
         let mu_div = one / mu;
         let mu_add = one + mu;
 
-        for (channel_index, channel) in self.samples.iter().enumerate() {
+        for (channel_index, channel) in self.samples.into_iter().enumerate() {
             new_samples[channel_index].reserve_exact(channel.len());
 
             new_samples[channel_index] = channel
                 .iter()
                 .map(|sample| {
                     let mut sample = F::from_expect(*sample) * two / mu_add;
-                    
+
                     if !I::IS_SIGNED {
                         sample = sample - one;
                     }
@@ -577,6 +606,21 @@ where
             samples: new_samples,
             sample_rate: self.sample_rate,
         }
+    }
+
+    #[must_use]
+    pub fn mu_dequantize<F>(&self, mu: usize) -> Signal<F>
+    where
+        F: FloatSample
+    {
+        self.clone()._mu_dequantize(mu)
+    }
+
+    pub fn into_mu_dequantize<F>(self, mu: usize) -> Signal<F>
+    where
+        F: FloatSample
+    {
+        self._mu_dequantize(mu)
     }
 }
 
@@ -597,6 +641,14 @@ where
     S: Sample,
     R: RodioSample,
 {
+    pub fn new(signal: Signal<S>) -> Self {
+        SignalRodioSource {
+            signal,
+            index: 0,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     #[inline(always)]
     pub fn inner(self) -> Signal<S> {
         self.signal
@@ -671,9 +723,9 @@ mod tests {
 
     #[test]
     fn load_test() {
-        let mut signal: Signal<f32> = Signal::load_default("Shape of You.wav").unwrap();
-
-        signal.to_mono_mut();
+        let signal: Signal<f32> = Signal::load_default("Shape of You.wav")
+            .unwrap()
+            .into_mono();
 
         println!(
             "Length: {}, Duration: {:?}",
@@ -691,18 +743,23 @@ mod tests {
 
     #[test]
     fn resample_test() {
-        let mut signal: Signal<f32> = Signal::load(
+        let signal: Signal<f32> = Signal::load(
             "Shape of You.wav",
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
+        .unwrap()
+        .into_mono()
+        .into_resample(60000, ResampleType::Fft)
         .unwrap();
 
-        signal.to_mono_mut();
+        println!(
+            "Length: {}, Duration: {:?}",
+            signal.len(),
+            signal.duration()
+        );
 
-        signal
-            ._resample(60000, ResampleType::SincVeryHighQuality)
-            .unwrap();
+        let signal = signal.into_resample(60000, ResampleType::Fft).unwrap();
 
         println!(
             "Length: {}, Duration: {:?}",
@@ -725,9 +782,8 @@ mod tests {
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap();
-
-        signal.to_mono_mut();
+        .unwrap()
+        .into_mono();
 
         for channel in &mut signal.samples {
             channel.truncate(10);
@@ -745,14 +801,13 @@ mod tests {
 
     #[test]
     fn zc_test() {
-        let mut signal: Signal<f32> = Signal::load(
+        let signal: Signal<f32> = Signal::load(
             "Shape of You.wav",
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap();
-
-        signal.to_mono_mut();
+        .unwrap()
+        .into_mono();
 
         let crossings = signal.zero_crossings();
 
@@ -763,14 +818,12 @@ mod tests {
 
     #[test]
     fn lpc_test() {
-        let mut signal: Signal<f32> = Signal::load(
+        let signal: Signal<f32> = Signal::load(
             "Shape of You.wav",
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap();
-
-        signal.to_mono_mut();
+        .unwrap().into_mono();
 
         println!("{} ", signal.len());
 
@@ -786,14 +839,12 @@ mod tests {
 
     #[test]
     fn mu_test() {
-        let mut signal: Signal<f32> = Signal::load(
+        let signal: Signal<f32> = Signal::load(
             "Shape of You.wav",
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap();
-
-        signal.to_mono_mut();
+        .unwrap().into_mono();
 
         print!("Original signal: ");
         for channel in signal.samples.iter() {
@@ -803,7 +854,7 @@ mod tests {
             println!();
         }
 
-        let signal: Signal<u8> = signal.mu_compress_to_quantized(255);
+        let signal: Signal<u8> = signal.mu_quantize(255);
 
         print!("Compressed signal: ");
         for channel in signal.samples.iter() {
@@ -813,7 +864,7 @@ mod tests {
             println!();
         }
 
-        let signal: Signal<f32> = signal.mu_expand_from_quantized(255);
+        let signal: Signal<f32> = signal.mu_dequantize(255);
 
         print!("Expended signal: ");
         for channel in signal.samples.iter() {
@@ -822,5 +873,48 @@ mod tests {
             }
             println!();
         }
+    }
+
+    #[test]
+    fn stft_test() {
+        let signal: Signal<f32> = Signal::load(
+            "Shape of You.wav",
+            Duration::ZERO,
+            Some(Duration::from_secs(10)),
+        )
+        .unwrap().into_mono();
+
+        println!("Signal shape: {}", signal.len());
+        for channel in signal.samples.iter() {
+            for sample in channel.iter().take(10) {
+                print!("{:.4} ", sample);
+            }
+            println!()
+        }
+        println!();
+
+        let spectrum = signal.stft(2049, Some(512), None, WindowType::Hann, true);
+
+        println!("Spectrum shape: {}, {}", spectrum.len(), spectrum.frames());
+        for channel in spectrum.freqs.iter() {
+            for frame in channel.iter().take(5) {
+                for freq in frame.iter().take(5) {
+                    print!("{:.4} ", freq);
+                }
+                println!()
+            }
+        }
+        println!();
+
+        let signal = spectrum.istft(2049, Some(512), None, WindowType::Hann, true);
+
+        println!("Signal shape: {}", signal.len());
+        for channel in signal.samples.iter() {
+            for sample in channel.iter().take(10) {
+                print!("{:.4} ", sample);
+            }
+            println!()
+        }
+        println!();
     }
 }

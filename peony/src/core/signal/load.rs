@@ -12,26 +12,35 @@ use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 use symphonia::default::{get_codecs, get_probe};
 
+use super::Signal;
 use crate::core::sample::Sample;
 use crate::core::util::into_deinterleave;
-use super::Signal;
 
 //////////////////////////////////////////////////  SignalLoader  //////////////////////////////////////////////////
 
-pub struct SignalLoader<S>
+pub(crate) struct SignalLoader<S>
 where
     S: Sample + SymphoniaSample,
 {
     pub path: String,
     pub offset: Duration,
     pub duration: Option<Duration>,
-    pub _marker: std::marker::PhantomData<S>,
+    _marker: std::marker::PhantomData<S>,
 }
 
 impl<S> SignalLoader<S>
 where
     S: Sample + SymphoniaSample,
 {
+    pub fn new(path: &str, offset: Duration, duration: Option<Duration>) -> Self {
+        SignalLoader {
+            path: path.to_string(),
+            offset,
+            duration,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     fn _n_frames(&self, all_frames: u64, sample_rate: u32) -> u64 {
         let mut frames = all_frames - (self.offset.as_secs_f64() * sample_rate as f64) as u64;
 
