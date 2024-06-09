@@ -10,11 +10,14 @@ use symphonia::core::conv::{ConvertibleSample as SymphoniaSample, FromSample};
 use super::sample::{FloatSample, IntSample, Sample};
 use super::spectrum::{stft::Stft, window::WindowType, Spectrum};
 
-pub mod load;
-pub mod resample;
+pub(crate) mod load;
+pub(crate) mod resample;
 
 use load::SignalLoader;
-use resample::{ResampleType, Resampler};
+use resample::Resampler;
+
+pub use load::*;
+pub use resample::ResampleType;
 
 //////////////////////////////////////////////////  Signal  //////////////////////////////////////////////////
 

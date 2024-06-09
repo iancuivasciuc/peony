@@ -1,4 +1,6 @@
 #[macro_use]
 extern crate lazy_static;
 
-pub mod core;
+pub(crate) mod core;
+
+pub use core::*;

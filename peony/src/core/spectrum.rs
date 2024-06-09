@@ -5,10 +5,11 @@ use super::sample::FloatSample;
 use super::signal::Signal;
 
 pub(crate) mod stft;
-pub mod window;
+pub(crate) mod window;
 
 use stft::Stft;
-use window::WindowType;
+
+pub use window::*;
 
 //////////////////////////////////////////////////  Spectrum  //////////////////////////////////////////////////
 
