@@ -92,12 +92,12 @@ where
 
     #[inline(always)]
     pub fn bits_per_sample(&self) -> usize {
-        std::mem::size_of::<Self>() * 8
+        std::mem::size_of::<S>() * 8
     }
 
     #[inline(always)]
     pub fn data_type(&self) -> &'static str {
-        std::any::type_name::<Self>()
+        std::any::type_name::<S>()
     }
 
     #[inline(always)]
@@ -225,7 +225,7 @@ where
         let mut spectrum = rfft.make_output_vec();
 
         for (channel_index, channel) in self.samples.iter().enumerate() {
-            autocorr[channel_index].copy_from_slice(channel);
+            autocorr[channel_index][..self.len()].copy_from_slice(channel);
 
             rfft.process(&mut autocorr[channel_index], &mut spectrum)
                 .unwrap();
@@ -395,7 +395,7 @@ where
         let mu_f = F::from_expect(mu);
         let mu_log = (one + mu_f).ln();
 
-        let linspace: Vec<F> = (0..=mu + 1)
+        let linspace: Vec<F> = (0..=mu)
             .map(|i| F::from_expect(i) * two / mu_f - one)
             .collect();
 
@@ -422,11 +422,11 @@ where
                         .unwrap_or_else(|x| x);
 
                     if I::IS_SIGNED {
-                        let bin = bin as i32 - ((mu + 1) / 2) as i32;
+                        let bin = bin as i32 - ((mu + 1) / 2) as i32 - 1;
 
                         I::from_expect(bin)
                     } else {
-                        I::from_expect(bin)
+                        I::from_expect(bin - 1)
                     }
                 })
                 .collect();
@@ -441,14 +441,14 @@ where
     #[must_use]
     pub fn mu_quantize<I>(&self, mu: usize) -> Signal<I>
     where
-        I: IntSample
+        I: IntSample,
     {
         self.clone()._mu_quantize(mu)
     }
 
     pub fn into_mu_quantize<I>(self, mu: usize) -> Signal<I>
     where
-        I: IntSample
+        I: IntSample,
     {
         self._mu_quantize(mu)
     }
@@ -571,7 +571,7 @@ impl<I> Signal<I>
 where
     I: IntSample,
 {
-    pub fn _mu_dequantize<F>(self, mu: usize) -> Signal<F>
+    fn _mu_dequantize<F>(self, mu: usize) -> Signal<F>
     where
         F: FloatSample,
     {
@@ -592,7 +592,7 @@ where
             new_samples[channel_index] = channel
                 .iter()
                 .map(|sample| {
-                    let mut sample = F::from_expect(*sample) * two / mu_add;
+                    let mut sample = (F::from_expect(*sample) + F::one()) * two / mu_add;
 
                     if !I::IS_SIGNED {
                         sample = sample - one;
@@ -614,14 +614,14 @@ where
     #[must_use]
     pub fn mu_dequantize<F>(&self, mu: usize) -> Signal<F>
     where
-        F: FloatSample
+        F: FloatSample,
     {
         self.clone()._mu_dequantize(mu)
     }
 
     pub fn into_mu_dequantize<F>(self, mu: usize) -> Signal<F>
     where
-        F: FloatSample
+        F: FloatSample,
     {
         self._mu_dequantize(mu)
     }
@@ -826,7 +826,8 @@ mod tests {
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap().into_mono();
+        .unwrap()
+        .into_mono();
 
         println!("{} ", signal.len());
 
@@ -847,7 +848,8 @@ mod tests {
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap().into_mono();
+        .unwrap()
+        .into_mono();
 
         print!("Original signal: ");
         for channel in signal.samples.iter() {
@@ -885,7 +887,8 @@ mod tests {
             Duration::ZERO,
             Some(Duration::from_secs(10)),
         )
-        .unwrap().into_mono();
+        .unwrap()
+        .into_mono();
 
         println!("Signal shape: {}", signal.len());
         for channel in signal.samples.iter() {

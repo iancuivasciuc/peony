@@ -93,11 +93,6 @@ where
         let last_output_size =
             last_input_size * self.new_sample_rate as usize / signal.sample_rate as usize;
 
-        println!(
-            "Last: Frame index: {}, Input Size: {}, Output Size: {}",
-            last_frame_index, last_output_size, last_input_size
-        );
-
         for (channel_index, channel) in signal.samples.iter().enumerate() {
             input_buffer[channel_index][..last_input_size]
                 .copy_from_slice(&channel[last_frame_index..(last_frame_index + last_input_size)]);

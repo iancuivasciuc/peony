@@ -14,7 +14,7 @@ opt-level = 1
 lazy_static = "1.4.0"
 num-traits = "0.2.19"
 realfft = "3.3.0"
-rodio = "0.18.1"
+rodio = { version = "0.18.1", default-features = false, features = ["symphonia"] }
 rubato = "0.15.0"
 symphonia = { version = "0.5.4", features = ["all"] }
 

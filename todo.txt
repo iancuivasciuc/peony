@@ -1,5 +1,0 @@
-Window Function
-
-STFT, ISTFT
-
-Si documentatie

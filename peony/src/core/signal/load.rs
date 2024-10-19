@@ -75,11 +75,12 @@ where
         );
         let frames_per_packet = track.codec_params.max_frames_per_packet.unwrap_or_default();
 
-        let frames_first_packet = frames_per_packet
-            - ((self.offset.as_secs_f64() * sample_rate as f64) as u64 % frames_per_packet);
-        let frames_first_packet = std::cmp::min(frames_first_packet, frames);
+        // let frames_first_packet = frames_per_packet
+        //     - ((self.offset.as_secs_f64() * sample_rate as f64) as u64 % frames_per_packet);
+        // let frames_first_packet = std::cmp::min(frames_first_packet, frames);
 
-        let mut frames_to_read = frames - frames_first_packet;
+        // let mut frames_to_read = frames - frames_first_packet;
+        let mut frames_to_read = frames;
 
         let mut samples: Vec<S> = Vec::with_capacity((frames * channels as u64) as usize);
         let mut sample_buffer = None;
@@ -109,12 +110,13 @@ where
 
                         let slice = buffer.samples();
 
-                        if samples.is_empty() {
-                            samples.extend_from_slice(
-                                &slice[slice.len()
-                                    - (frames_first_packet * channels as u64) as usize..],
-                            );
-                        } else if frames_to_read <= (slice.len() as u64 / channels as u64) {
+                        // if samples.is_empty() {
+                            // samples.extend_from_slice(
+                            //     &slice[slice.len()
+                            //         - (frames_first_packet * channels as u64) as usize..],
+                            // );
+                        // } else 
+                        if frames_to_read <= (slice.len() as u64 / channels as u64) {
                             samples.extend_from_slice(
                                 &slice[..(frames_to_read * channels as u64) as usize],
                             );

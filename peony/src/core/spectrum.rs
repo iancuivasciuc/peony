@@ -26,10 +26,7 @@ where
     F: FloatSample + FftNum,
 {
     pub fn new(freqs: Vec<Vec<Vec<Complex<F>>>>, sample_rate: u32) -> Self {
-        Spectrum {
-            freqs,
-            sample_rate,
-        }
+        Spectrum { freqs, sample_rate }
     }
 
     #[inline(always)]
