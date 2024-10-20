@@ -1,4 +1,4 @@
 # peony
-Rust Audio Processing Library
+Rust Audio Signal Processing And Analysis Library
 
 Work in progress
